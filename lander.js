@@ -15,7 +15,7 @@ class Lander {
     this.altitude = 0;
     this.thrustLevel = 0;
     this.nearestPlanet = null;
-
+    this.radius =20;
     // Physics constants
     this.gravity = 0.0;
     this.thrust = 0.01;
@@ -40,7 +40,25 @@ class Lander {
     this.targetRotation += direction * 15;
     // this.targetRotation = constrain(this.targetRotation, -90, 90);
   }
+  crash() {
+    this.active = false;
+    this.thrusting = 0;
+    this.abducting = false;
+    
+    // Optional: Add explosion particles or other crash effects here
+    // You could emit an event or set a flag for the main game to handle visual effects
+    
+    console.log("Lander crashed!");
+  }
 
+  land() {
+    this.active = false;
+    this.thrusting = 0;
+    this.abducting = false;
+    this.vel.mult(0); // Stop all movement
+    
+    console.log("Lander landed safely!");
+  }
   setThrust(power) {
     if (this.fuel <= 0) power = 0;
     this.thrusting = power;

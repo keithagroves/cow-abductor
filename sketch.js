@@ -159,7 +159,11 @@ function draw() {
   // Update and draw lander if we're not waiting
   if (gameState !== WAITING) {
     lander.update();
-    checkCollisions(lander, planets); // Check collisions against *all* planets
+    // Remove console.log and fix function call by passing required parameters
+    if(checkCollisions(lander, planets)){ 
+      lander.crash();
+      gameState = CRASHED;
+    }
     lander.render();
   }
 
@@ -254,41 +258,6 @@ function updateView() {
   view.x += (targetX - view.x) * 0.1;
   view.y += (targetY - view.y) * 0.1;
 }
-
-/*********************************************************
- *                   COLLISION
- *********************************************************/
-function checkCollisions(lander, planets) {
-  if (!lander.active) return;
-  lander.altitude = height; // Or Infinity, as a big default
-
-  // Check collisions with each planet in the planets array
-  let startdist = 100000;
-  let closestPlanet = planets[0];
-  for (let planet of planets) {
-    let planDist = dist(
-      planet.center.x,
-      planet.center.y,
-      lander.pos.x,
-      lander.pos.y
-    );
-    if (planDist < startdist) {
-      closestPlanet = planet;
-      startdist = planDist;
-    }
-    let points = planet.landscape;
-    for (let i = 0; i < points.length - 1; i++) {
-      let p1 = points[i];
-      let p2 = points[i + 1];
-
-      // Check if horizontally above segment ...
-      // Interpolate terrain, check if lander hits ground, etc.
-      // Decide safe landing vs crash...
-    }
-  }
-  lander.setNearestPlanet(closestPlanet);
-}
-
 /*********************************************************
  *                   DRAW HELPERS
  *********************************************************/
@@ -298,6 +267,165 @@ function drawStarField() {
     stroke(star.brightness);
     point(star.x, star.y);
   }
+}
+function checkCollisions(lander, planets) {
+  if (!lander.active) {
+    return false;
+  }
+  
+  lander.altitude = Infinity;
+  let startdist = Infinity;
+  let closestPlanet = planets[0];
+  
+  // First find the closest planet and calculate altitude
+  for (let planet of planets) {
+    let planDist = dist(
+      planet.center.x,
+      planet.center.y,
+      lander.pos.x,
+      lander.pos.y
+    );
+    
+    // Calculate altitude as distance from planet surface
+    let altitudeFromPlanet = planDist - planet.baseRadius;
+    lander.altitude = min(lander.altitude, altitudeFromPlanet);
+    
+    if (planDist < startdist) {
+      closestPlanet = planet;
+      startdist = planDist;
+    }
+  }
+  
+  lander.setNearestPlanet(closestPlanet);
+  
+  // Now check for collisions with the closest planet's terrain
+  let points = closestPlanet.landscape;
+  let collisionDetected = false;
+  
+  for (let i = 0; i < points.length - 1; i++) {
+    let p1 = points[i];
+    let p2 = points[i + 1];
+    
+    // Check if lander is horizontally between these points
+    let isInSegment = isPointInLineSegment(
+      lander.pos.x,
+      lander.pos.y,
+      p1.x, p1.y,
+      p2.x, p2.y
+    );
+    
+    if (isInSegment) {
+      // Calculate distance from lander to terrain segment
+      let distance = distanceToLineSegment(
+        lander.pos.x,
+        lander.pos.y,
+        p1.x, p1.y,
+        p2.x, p2.y
+      );
+      
+      // Update altitude if this is the closest point to terrain
+      lander.altitude = min(lander.altitude, distance);
+      
+      // Check for collision (using lander radius as threshold)
+      if (distance < lander.radius && gameState !== LANDED) {
+        collisionDetected = true;
+        console.log("collision detected")
+        // Check if this is a safe landing
+        let isSafeLanding = checkSafeLanding(lander, p1, p2);
+        
+        if (isSafeLanding) {
+          lander.land();
+          gameState = LANDED;
+          score += 100;
+          return false
+        } else {
+          lander.crash();
+          gameState = CRASHED;
+        }
+        break;
+      }
+    }
+  }
+  
+  // Also check for collision with planet's basic radius
+  let distToCenter = dist(
+    lander.pos.x,
+    lander.pos.y,
+    closestPlanet.center.x,
+    closestPlanet.center.y
+  );
+  
+  if (distToCenter <= closestPlanet.baseRadius*.9 + lander.radius) {
+    return true;
+  }
+  
+  return collisionDetected;
+}
+// Helper function to check if a point is near a line segment
+function isPointInLineSegment(px, py, x1, y1, x2, y2) {
+  // Calculate the bounding box of the line segment
+  let minX = min(x1, x2) - 10; // Add some margin
+  let maxX = max(x1, x2) + 10;
+  let minY = min(y1, y2) - 10;
+  let maxY = max(y1, y2) + 10;
+  
+  // Check if point is within the bounding box
+  return px >= minX && px <= maxX && py >= minY && py <= maxY;
+}
+
+// Helper function to calculate distance from point to line segment
+function distanceToLineSegment(px, py, x1, y1, x2, y2) {
+  let A = px - x1;
+  let B = py - y1;
+  let C = x2 - x1;
+  let D = y2 - y1;
+  
+  let dot = A * C + B * D;
+  let len_sq = C * C + D * D;
+  let param = -1;
+  
+  if (len_sq != 0) {
+    param = dot / len_sq;
+  }
+  
+  let xx, yy;
+  
+  if (param < 0) {
+    xx = x1;
+    yy = y1;
+  } else if (param > 1) {
+    xx = x2;
+    yy = y2;
+  } else {
+    xx = x1 + param * C;
+    yy = y1 + param * D;
+  }
+  
+  return dist(px, py, xx, yy);
+}
+
+// Helper function to check if landing is safe
+function checkSafeLanding(lander, p1, p2) {
+  // Calculate slope of terrain
+  let terrainAngle = degrees(atan2(p2.y - p1.y, p2.x - p1.x));
+  
+  // Check if terrain is relatively flat (within 20 degrees of horizontal)
+  let isTerrainFlat = abs(terrainAngle) < 40;
+  
+  // Check if landing point is marked as landable
+  let isLandable = p1.landable && p2.landable;
+  
+  // Check lander's velocity and orientation
+  let isVelocitySafe = lander.vel.mag() < 100.0; // Adjust threshold as needed
+
+  if(!isVelocitySafe){
+    console.log("lander velocity", lander.vel.mag())
+  } 
+  if(!isLandable){
+    console.log("lander landable", p1.landable, p2.landable)
+  }
+
+  return  isLandable && isVelocitySafe;
 }
 function getBeamStopPositionRadial( planet, maxBeamLength) {
   // 1) Compute angle from planet center to lander (in radians).
