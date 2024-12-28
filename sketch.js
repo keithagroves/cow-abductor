@@ -23,6 +23,8 @@ let startTime;
 let touchable = "ontouchstart" in window;
 let research = 0;
 let backgroundMusic=null;
+let rocketSound;
+let thrustPlaying = false;
 /*********************************************************
  *                   P5 LIFE CYCLE
  *********************************************************/
@@ -37,6 +39,12 @@ function preload() {
       console.error("Failed to load cow image:", error);
     }
   );
+  // alien image
+  alienImage = loadImage("alien.png",
+    () => {
+      console.log("Alien image loaded successfully");
+    })
+    // Success callback
   backgroundMusic = loadSound("leaving-for-good.mp3", 
     // Success callback
     () => {
@@ -47,13 +55,60 @@ function preload() {
       console.error("Failed to load background music:", error);
     }
   );
-  // beepSound = loadSound("beep.mp3");
-  // crashSound = loadSound("crash.mp3");
+
 }
+
+
+function playThruster() {
+  // if (!boost) return;
+  
+  if (!thrustPlaying) {
+    rocketSound.start();
+    //boost.start()
+    thrustInterval = setInterval(updateThruster, 10);
+    thrustPlaying = true;
+  }
+  
+  thrustTargetVolume = 0.1; // Adjust this value to control max volume
+}
+
+function stopThruster() {
+  // if (!boost) return;
+  thrustPlaying = false
+  thrustTargetVolume = 0;
+  rocketSound.stop();
+  // Don't stop the sound immediately - let it fade out in updateThruster
+}
+thrustVolume = 0;
+thrustTargetVolume = 0;
+function updateThruster() {
+
+  if (thrustVolume !== thrustTargetVolume) {
+    thrustVolume += (thrustTargetVolume - thrustVolume) * 0.1;
+    
+    // Snap to target if very close
+    if (Math.abs(thrustVolume - thrustTargetVolume) < 0.001) {
+      thrustVolume = thrustTargetVolume;
+    }
+    
+    // boost.setVolume(thrustVolume);
+  }
+  
+  // If volume has reached 0, stop the sound and clear interval
+  if (thrustPlaying && thrustVolume <= 0.001 && thrustTargetVolume === 0) {
+    // boost.stop();
+    clearInterval(thrustInterval);
+    thrustInterval = null;
+    thrustPlaying = false;
+  }
+}
+
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
   angleMode(DEGREES);
+  rocketSound = new RocketSound();
+
   // Initialize audio context with user interaction
   if (getAudioContext().state !== 'running') {
     getAudioContext().suspend();
@@ -146,7 +201,18 @@ function initializeCows() {
     if (landablePoints.length > 0) {
       let point = random(landablePoints);
       // Place a cow slightly above the terrain
-      cows.push(new Cow(point.x, point.y - 30, cowImage));
+      dy = point.y - randomPlanet.center.y;
+      dx = point.x - randomPlanet.center.x;
+      angle = atan2(dy, dx);
+      // move the cow distance from the radius of the planet
+      cowY = point.y + 10 * sin(angle);
+      cowX = point.x + 10 * cos(angle);
+
+      if(i % 2 == 0){
+        cows.push(new Cow(cowX, cowY, alienImage));
+      } else {
+      cows.push(new Cow(cowX, cowY, cowImage));
+      }
     }
   }
 }
@@ -331,8 +397,19 @@ function keyPressed() {
   }
   if (keyCode === LEFT_ARROW) lander.rotate(-1);
   if (keyCode === RIGHT_ARROW) lander.rotate(1);
-  if (keyCode === UP_ARROW) lander.setThrust(1);
-
+  if (keyCode === UP_ARROW) {
+    // if (boost) {
+    //   try {
+    //     // boost.play();
+    //     // boost.setVolume(0.1);
+        
+    //   } catch (error) {
+    //     console.error("Error playing background music:", error);
+    //   }
+    // }
+    playThruster()
+    lander.setThrust(1);
+  }
   if (key === "a" || key === "A") {
     lander.abducting = true;
   }
@@ -341,6 +418,7 @@ function keyPressed() {
 function keyReleased() {
   if (keyCode === UP_ARROW) {
     lander.setThrust(0);
+     stopThruster();
   }
   if (key === "a" || key === "A") {
     lander.abducting = false;

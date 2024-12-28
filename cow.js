@@ -9,7 +9,6 @@ class Cow {
     this.offset = createVector();
     this.scale = 0.8;
     this.pull = 0;
-    // Adjust as needed
     this.maxSpeed = 3; // Maximum speed
     this.pullStrength = 0.05; // How strongly it's pulled toward the lander
     this.origin = createVector(x, y);
@@ -57,11 +56,8 @@ class Cow {
       }
 
       // Move the cow by its velocity
-      // if(this.pos.y + this.vel.y <= origin.y){
         this.pos.add(this.vel);
-      // } else {
-      //   this.vel.y/=2
-      // }
+
     }
   }
 
