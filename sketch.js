@@ -132,7 +132,7 @@ function setup() {
 
   // center, baseRadius, noiseIntensity, numPoints, strokeColor
   planets.push(
-    new Planet(createVector(-1000, 300), 1000, 300, 400, color(0, 255, 255, 100))
+    new Planet(createVector(-1000, 300), 500, 100, 400, color(0, 255, 255))
   );
 
   resetGame();
@@ -221,16 +221,26 @@ function initializeCows() {
  *                   VIEW & CAMERA
  *********************************************************/
 function updateView() {
-  // Zoom in/out based on altitude
-  if (!zoomedIn && lander.altitude < 70) {
-    view.scale = 2;
-    zoomedIn = true;
-  } else if (zoomedIn && lander.altitude > 160) {
-    view.scale = 1;
-    zoomedIn = false;
+  let minDistance = Infinity;
+  for (let planet of planets) {
+    let distToCenter = dist(lander.pos.x, lander.pos.y, planet.center.x, planet.center.y);
+    let approximateSurfaceDistance = max(0, distToCenter - (planet.baseRadius+100))
+    minDistance = min(minDistance, approximateSurfaceDistance);
   }
 
-  // Smooth camera movement
+  const ZOOM_THRESHOLD = 400; 
+  const MAX_ZOOM = 3;        
+  const MIN_ZOOM = 1;        
+
+  if (minDistance < ZOOM_THRESHOLD) {
+    // Smoothly interpolate zddoom based on distance
+    let zoomFactor = map(minDistance, 0, ZOOM_THRESHOLD, MAX_ZOOM, MIN_ZOOM);
+    view.scale += (zoomFactor - view.scale) * 0.1; // Smooth transition
+  } else if (view.scale > MIN_ZOOM) {
+    view.scale += (MIN_ZOOM - view.scale) * 0.1;
+  }
+
+  // Camera movement
   let targetX = -lander.pos.x * view.scale + width / 2;
   let targetY = -lander.pos.y * view.scale + height * 0.4;
   view.x += (targetX - view.x) * 0.1;
