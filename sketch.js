@@ -25,6 +25,8 @@ let research = 0;
 let backgroundMusic=null;
 let rocketSound;
 let thrustPlaying = false;
+let ROTATE_LEFT = false;
+let ROTATE_RIGHT = false;
 /*********************************************************
  *                   P5 LIFE CYCLE
  *********************************************************/
@@ -168,7 +170,13 @@ function draw() {
   }
 
   pop();
-
+  if(ROTATE_LEFT){
+    lander.rotate(-.2);
+  }
+  else if (ROTATE_RIGHT){
+    lander.rotate(.2);
+    
+  }
   drawHUD();
   drawGameStateMessages();
 }
@@ -346,6 +354,8 @@ function getBeamStopPositionRadial( planet, maxBeamLength) {
   // 5) Radial distance from lander to terrain
   let radialDistance = dist(lander.pos.x, lander.pos.y, terrainX, terrainY);
 
+
+
   // 6) Compare with maxBeamLength
   if (radialDistance > maxBeamLength) {
     radialDistance = maxBeamLength;
@@ -405,8 +415,8 @@ function keyPressed() {
     });
     return;
   }
-  if (keyCode === LEFT_ARROW) lander.rotate(-1);
-  if (keyCode === RIGHT_ARROW) lander.rotate(1);
+  if (keyCode === LEFT_ARROW) ROTATE_LEFT = true;
+  if (keyCode === RIGHT_ARROW) ROTATE_RIGHT = true;
   if (keyCode === UP_ARROW) {
     // if (boost) {
     //   try {
@@ -433,6 +443,8 @@ function keyReleased() {
   if (key === "a" || key === "A") {
     lander.abducting = false;
   }
+  if (keyCode === LEFT_ARROW) ROTATE_LEFT = false;
+  if (keyCode === RIGHT_ARROW) ROTATE_RIGHT = false;
 }
 
 function mousePressed() {
