@@ -8,6 +8,8 @@ class Planet {
     this.landscape = this.generateLandscape();
     this.gravity = gravity;
 
+    this.alien = new Alien(center, baseRadius, strokeColor);
+
   }
 
   generateLandscape() {
@@ -59,7 +61,7 @@ class Planet {
       vertex(p.x, p.y);
     }
     endShape();
-
+    
     // Draw landing pad indicators
     stroke(255, 255, 0);
     strokeWeight(4);
@@ -69,6 +71,7 @@ class Planet {
       }
     }
     strokeWeight(1);
+    this.alien.draw();
   }
 }
 
