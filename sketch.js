@@ -128,13 +128,16 @@ function setup() {
   // Create some planets (pushing them into the planets array)
   let planetCenter1 = createVector(width / 2, height / 2);
   let planetCenter2 = createVector(width, -200);
-
-  planets.push(new Planet(planetCenter1, 250, 50, 180, color(100, 255, 100)));
-  planets.push(new Planet(planetCenter2, 250, 50, 180, color(255, 0, 200)));
+  let blackhole = createVector(width/2, -1000);
+ 
+  // claim the planets
+  planets.push(new Planet(planetCenter1, 250, 50, 180, color(100, 255, 100), 100));
+  planets.push(new Planet(planetCenter2, 250, 50, 180, color(255, 0, 200), 100));
+  planets.push(new Planet(blackhole, 10, 50, 500, color(200, 0, 200), 1000));
 
   // center, baseRadius, noiseIntensity, numPoints, strokeColor
   planets.push(
-    new Planet(createVector(-1000, 300), 500, 100, 400, color(0, 255, 255))
+    new Planet(createVector(-2000, 300), 500, 100, 400, color(0, 255, 255))
   );
 
   resetGame();
@@ -240,7 +243,7 @@ function updateView() {
     minDistance = min(minDistance, approximateSurfaceDistance);
   }
 
-  const ZOOM_THRESHOLD = 400; 
+  const ZOOM_THRESHOLD = 100; 
   const MAX_ZOOM = 3;        
   const MIN_ZOOM = 1;        
 
@@ -329,7 +332,6 @@ function checkCollisions(lander, planets) {
       // Check for collision (using lander radius as threshold)
       if (distance < lander.radius && gameState !== LANDED) {
         collisionDetected = true;
-        console.log("collision detected")
         // Check if this is a safe landing
         let isSafeLanding = checkSafeLanding(lander, p1, p2);
         
@@ -498,11 +500,12 @@ function drawHUD() {
   noStroke();
   textAlign(LEFT);
   textSize(16);
-  text(`Score: ${score}`, 20, 30);
   text(`Fuel: ${floor(lander.fuel)}`, 20, 50);
   text(`Altitude: ${floor(lander.altitude)}`, 20, 70);
   text(`Velocity: ${lander.vel.mag().toFixed(2)}`, 20, 90);
   text(`Research: ${research}`, 20, 110);
+  text("X: " + lander.pos.x.toFixed(2), 20, 130);
+  text("Y: " + lander.pos.y.toFixed(2), 20, 150);
 }
 
 function drawGameStateMessages() {

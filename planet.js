@@ -1,11 +1,13 @@
 class Planet {
-  constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor) {
+  constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor, gravity) {
     this.center = center;
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
     this.numPoints = numPoints;
     this.strokeColor = strokeColor;
     this.landscape = this.generateLandscape();
+    this.gravity = gravity;
+
   }
 
   generateLandscape() {

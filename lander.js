@@ -20,7 +20,7 @@ class Lander {
     this.gravity = 0.0;
     this.thrust = 0.01;
     this.drag = 0.999;
-    this.topSpeed = 100;
+    this.topSpeed = 1000;
 
     this.reset();
   }
@@ -77,6 +77,28 @@ class Lander {
     // Smooth rotation
     this.rotation += (this.targetRotation - this.rotation) * 0.3;
 
+    // Calculate gravitational forces from all planets
+    let gravityVector = createVector(0, 0);
+    for (let planet of planets) {
+      if(this.nearestPlanet === planet){
+        let dx = planet.center.x - this.pos.x;
+        let dy = planet.center.y - this.pos.y;
+        let distSq = dx * dx + dy * dy;
+        // let dist = sqrt(distSq);
+        
+        // G * M / r^2 (simplified gravitational formula)
+        // Adjust gravitationalStrength to control the force
+        let gravitationalStrength = planet.gravity;
+        let force = gravitationalStrength / distSq;
+        
+        // Create normalized direction vector and multiply by force
+        gravityVector.add(createVector(dx, dy).normalize().mult(force));
+      }
+    }
+    
+    // Apply gravitational forces
+    this.vel.add(gravityVector);
+
     // Apply thrust
     if (this.thrusting > 0 && this.fuel > 0) {
       let thrustVector = createVector(0, -this.thrust * this.thrusting);
@@ -90,7 +112,6 @@ class Lander {
     }
 
     // Apply physics
-    this.vel.y += this.gravity;
     this.vel.mult(this.drag);
 
     // Limit speed
