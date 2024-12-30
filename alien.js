@@ -1,6 +1,7 @@
 class Alien {
     constructor(planetCenter, planetRadius, planetColor) {
-        this.center = createVector(planetCenter.x, planetCenter.y);
+        this.planetCenter = planetCenter;
+        this.center = planetCenter
         this.orbitRadius = planetRadius + 50; // Account for alien height
         this.angle = 0;
         this.planetColor = planetColor;
@@ -12,12 +13,12 @@ class Alien {
 
     update() {
         // Update position around the orbit
-        if(dist(this.pos.x, this.pos.y, this.center.x, this.center.y) <= this.orbitRadius+50){
         this.angle += this.speed;
         let x = this.center.x + cos(this.angle) * this.orbitRadius;
         let y = this.center.y + sin(this.angle) * this.orbitRadius;
         this.pos = createVector(x, y);
-        }
+        // if(dist(this.pos.x, this.pos.y, this.center.x, this.center.y) <= this.orbitRadius+50){
+        // }
     }
 
     draw() {
@@ -30,7 +31,7 @@ class Alien {
         // Move to orbital position and rotate to face movement direction
         translate(this.pos.x, this.pos.y);
         rotate(this.angle+degrees(PI/2));
-        scale(0.5);
+        scale(0.3);
         stroke(this.planetColor);
         
         // Head
@@ -55,12 +56,14 @@ class Alien {
         push();
         rotate(armAngle);
         line(0, 0, 20, 0);
+        circle(20, 0, 4);
         pop();
         
         // Left arm
         push();
         rotate(-armAngle);
         line(0, 0, -20, 0);
+        circle(-20, 0, 4);
         pop();
         
         pop();
@@ -73,12 +76,14 @@ class Alien {
         push();
         rotate(legAngle);
         line(0, 0, 15, 20);
+        line(15, 20, 20, 20);
         pop();
         
         // Left leg
         push();
         rotate(-legAngle);
         line(0, 0, -15, 20);
+        line(-15, 20, -20, 20);
         pop();
         
         pop();

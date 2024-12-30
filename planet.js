@@ -1,17 +1,51 @@
 class Planet {
-  constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor, gravity) {
+  constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor, gravity,sun, fillColor) {
+    this.orbitCenter = sun;
+    console.log(this.orbitCenter);
+
     this.center = center;
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
     this.numPoints = numPoints;
     this.strokeColor = strokeColor;
-    this.landscape = this.generateLandscape();
+    if(!fillColor)
+    this.fillColor = strokeColor;
+    else  
+    this.fillColor = fillColor;
     this.gravity = gravity;
+   // Add orbital parameters
+    this.orbitRadius = random(500, 2000);  // Distance from orbit center
+    this.orbitSpeed = random(0.05, 0.2);   // Angular velocity
+    this.orbitAngle = random(360);         // Starting angle
+    this.orbitEccentricity = random(0, 0.3); // 0 = circle, higher = more elliptical
 
-    this.alien = new Alien(center, baseRadius, strokeColor);
+
+    this.landscape = this.generateLandscape();
+
+    this.alien = new Alien(this.center, baseRadius, strokeColor);
 
   }
-
+  update() {
+    // Update orbit angle
+    this.orbitAngle += this.orbitSpeed;
+    this.alien.update();
+    
+    // Calculate new position using elliptical orbit
+    let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(this.orbitAngle));
+    this.center.x = this.orbitCenter.x + r * cos(this.orbitAngle);
+    this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
+    
+    // Update landscape points relative to new center
+    this.updateLandscapePoints();
+  }
+  updateLandscapePoints() {
+    for (let point of this.landscape) {
+      let angle = point.angle;
+      let r = point.r;
+      point.x = this.center.x + r * cos(angle);
+      point.y = this.center.y + r * sin(angle);
+    }
+  }
   generateLandscape() {
     let angleStep = 360 / this.numPoints;
     let noiseOffset = random(1000);
@@ -54,14 +88,29 @@ class Planet {
   }
 
   draw() {
+    // Draw orbit path
+    push();
+    stroke(this.strokeColor, 50); // Semi-transparent orbit line
+    noFill();
+    beginShape();
+    for (let a = 0; a < 360; a += 5) {
+      let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(a));
+      let x = this.orbitCenter.x + r * cos(a);
+      let y = this.orbitCenter.y + r * sin(a);
+      vertex(x, y);
+    }
+    endShape(CLOSE);
+    pop();
+
+    // Draw planet
     stroke(this.strokeColor);
-    fill(this.strokeColor);
+    fill(this.fillColor);
     beginShape();
     for (let p of this.landscape) {
       vertex(p.x, p.y);
     }
     endShape();
-    
+
     // Draw landing pad indicators
     stroke(255, 255, 0);
     strokeWeight(4);

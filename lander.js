@@ -112,7 +112,7 @@ class Lander {
     }
 
     // Apply physics
-    this.vel.mult(this.drag);
+    //this.vel.mult(this.drag);
 
     // Limit speed
     let speed = this.vel.mag();
