@@ -29,7 +29,7 @@ class Alien {
         push();
         // Move to orbital position and rotate to face movement direction
         translate(this.pos.x, this.pos.y);
-        rotate(degrees(sin(this.angle)+PI/2));
+        rotate(this.angle+degrees(PI/2));
         scale(0.5);
         stroke(this.planetColor);
         
