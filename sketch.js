@@ -124,7 +124,7 @@ function setup() {
       brightness: random(100, 255),
     });
   }
-  let sun = createVector(0, 0);
+  let sun = createVector(5000, -100);
   // Create some planets (pushing them into the planets array)
   let planetCenter1 = createVector(width / 2, height / 2,);
   let planetCenter2 = createVector(width, -200);
@@ -132,12 +132,12 @@ function setup() {
   let bigPlanet = createVector(-1000, -1000);
 
   // claim the planets
-  planets.push(new Planet(planetCenter1, 250, 50, 180, color(100, 255, 100), 100, sun));
-  planets.push(new Planet(createVector(1000, 2000), .001, 1, 3, color(255, 255, 255), 5000, sun));
-  planets.push(new Planet(planetCenter2, 250, 50, 180, color(255, 0, 200), 100, sun));
+  planets.push(new Planet(planetCenter1, 250, 50, 180, color(100, 255, 100), 500, sun));
+  planets.push(new Planet(createVector(1000, 2000), .001, 1, 3, color(255, 255, 255), 500, sun));
+  planets.push(new Planet(planetCenter2, 250, 50, 180, color(255, 0, 200), 500, sun));
   planets.push(new Planet(blackhole, 100, 10, 30, color(255), 5000, sun, color(0)));
   planets.push(new Planet(bigPlanet, 599, 50, 50, color(200, 0, 200), 1000,sun));
-  planets.push(new Planet(sun, 1000, 50, 180, color(255, 255, 0), 100, sun));
+  planets.push(new Planet(sun.copy(), 1000, 50, 180, color(255, 255, 0), 5000, sun));
 
   // center, baseRadius, noiseIntensity, numPoints, strokeColor
   planets.push(
@@ -146,7 +146,93 @@ function setup() {
 
   resetGame();
 }
+function drawMinimap() {
+  // Set up minimap position and size
+  const mapSize = 200;
+  const padding = 20;
+  const mapX = width - mapSize - padding;
+  const mapY = padding;
+  const mapScale = 0.02; // Adjust this to show more/less of the game world
 
+  // Create graphics buffer for minimap
+  let minimapBuffer = createGraphics(mapSize, mapSize);
+  minimapBuffer.background(0, 0, 0, 200);
+  
+  // Draw border on buffer
+  minimapBuffer.stroke(255);
+  minimapBuffer.strokeWeight(2);
+  minimapBuffer.noFill();
+  minimapBuffer.rect(0, 0, mapSize, mapSize);
+
+  // Calculate center of minimap
+  const centerX = mapSize/2;
+  const centerY = mapSize/2;
+
+  if (lander && lander.active) {
+    // Draw planets relative to lander position
+    for (let planet of planets) {
+      // Convert world coordinates to minimap coordinates, relative to lander
+      let minimapX = centerX + (planet.center.x - lander.pos.x) * mapScale;
+      let minimapY = centerY + (planet.center.y - lander.pos.y) * mapScale;
+      
+      // Draw planet
+      minimapBuffer.noStroke();
+      minimapBuffer.fill(planet.strokeColor);
+      let minimapRadius = max(4, planet.baseRadius * mapScale);
+      minimapBuffer.circle(minimapX, minimapY, minimapRadius);
+
+      // Draw orbit paths
+      minimapBuffer.stroke(planet.strokeColor, 50);
+      minimapBuffer.noFill();
+      let orbitRadius = planet.orbitRadius * mapScale;
+      minimapBuffer.ellipse(
+        centerX + (planet.orbitCenter.x - lander.pos.x) * mapScale, 
+        centerY + (planet.orbitCenter.y - lander.pos.y) * mapScale, 
+        orbitRadius * 2, orbitRadius * 2
+      );
+    }
+
+    // Draw cows relative to lander position
+    for (let cow of cows) {
+      let minimapX = centerX + (cow.pos.x - lander.pos.x) * mapScale;
+      let minimapY = centerY + (cow.pos.y - lander.pos.y) * mapScale;
+      minimapBuffer.fill(0, 255, 0);
+      minimapBuffer.noStroke();
+      minimapBuffer.circle(minimapX, minimapY, 3);
+    }
+
+    // Draw lander in center
+    minimapBuffer.fill(255, 0, 0);
+    minimapBuffer.noStroke();
+    minimapBuffer.circle(centerX, centerY, 4);
+
+    // Draw view rectangle centered on lander
+    minimapBuffer.noFill();
+    minimapBuffer.stroke(255, 100);
+    minimapBuffer.strokeWeight(1);
+    let viewWidth = width * mapScale;
+    let viewHeight = height * mapScale;
+    minimapBuffer.rect(
+      centerX - viewWidth/2, 
+      centerY - viewHeight/2, 
+      viewWidth, 
+      viewHeight
+    );
+  }
+
+  // Draw compass directions
+  minimapBuffer.textSize(12);
+  minimapBuffer.textAlign(CENTER, CENTER);
+  minimapBuffer.fill(255);
+  minimapBuffer.noStroke();
+  minimapBuffer.text('N', centerX, 15);
+  minimapBuffer.text('S', centerX, mapSize - 15);
+  minimapBuffer.text('W', 15, centerY);
+  minimapBuffer.text('E', mapSize - 15, centerY);
+
+  // Draw the buffer to the screen
+  image(minimapBuffer, mapX, mapY);
+}
 function draw() {
   background(0);
   drawStarField();
@@ -192,6 +278,7 @@ function draw() {
   }
   drawHUD();
   drawGameStateMessages();
+  drawMinimap();
 }
 
 function windowResized() {

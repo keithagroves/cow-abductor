@@ -1,8 +1,9 @@
 class Planet {
   constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor, gravity,sun, fillColor) {
+  
     this.orbitCenter = sun;
     console.log(this.orbitCenter);
-
+    this.isSun = false;
     this.center = center;
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
@@ -14,11 +15,14 @@ class Planet {
     this.fillColor = fillColor;
     this.gravity = gravity;
    // Add orbital parameters
-    this.orbitRadius = random(500, 2000);  // Distance from orbit center
-    this.orbitSpeed = random(0.05, 0.2);   // Angular velocity
+    if(this.center.x != sun.x && this.center.y != sun.y){
+    this.orbitRadius = random(2000, 10000);  // Distance from orbit center
+    this.orbitSpeed = random(0.001, 0.002);   // Angular velocity
     this.orbitAngle = random(360);         // Starting angle
     this.orbitEccentricity = random(0, 0.3); // 0 = circle, higher = more elliptical
-
+    } else {
+      this.isSun = true;
+    }
 
     this.landscape = this.generateLandscape();
 
@@ -32,9 +36,10 @@ class Planet {
     
     // Calculate new position using elliptical orbit
     let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(this.orbitAngle));
+    if(!this.isSun){ 
     this.center.x = this.orbitCenter.x + r * cos(this.orbitAngle);
     this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
-    
+    }
     // Update landscape points relative to new center
     this.updateLandscapePoints();
   }
