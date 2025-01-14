@@ -1,4 +1,5 @@
 class Alien {
+    
     constructor(planetCenter, planetRadius, planetColor) {
         this.planetCenter = planetCenter;
         this.center = planetCenter
@@ -9,6 +10,8 @@ class Alien {
         let x = this.center.x + cos(this.angle) * this.orbitRadius;
         let y = this.center.y + sin(this.angle) * this.orbitRadius;
         this.pos = createVector(x, y);
+        this.image = loadImage('unnamed.png');
+        this.image = loadImage('unnamed.png');
     }
 
     update() {
@@ -17,6 +20,7 @@ class Alien {
         let x = this.center.x + cos(this.angle) * this.orbitRadius;
         let y = this.center.y + sin(this.angle) * this.orbitRadius;
         this.pos = createVector(x, y);
+
         // if(dist(this.pos.x, this.pos.y, this.center.x, this.center.y) <= this.orbitRadius+50){
         // }
     }
@@ -34,59 +38,60 @@ class Alien {
         scale(0.3);
         stroke(this.planetColor);
         
-        // Head
-        circle(0, 0, 24);
-        line(-20,-20, -10,-10);
-        circle(-20, -20, 4);
-        circle(-10, -20, 4);
-        line(-10,-10, -10,-20);
-        circle(10, -20, 4);
-        line(20,-20, 10,-10);
-        circle(20, -20, 4);
-        line(10, -10, 10,-20);
+        // // Head
+        // circle(0, 0, 24);
+        // line(-20,-20, -10,-10);
+        // circle(-20, -20, 4);
+        // circle(-10, -20, 4);
+        // line(-10,-10, -10,-20);
+        // circle(10, -20, 4);
+        // line(20,-20, 10,-10);
+        // circle(20, -20, 4);
+        // line(10, -10, 10,-20);
         
-        // Body
-        line(0, 10, 0, 40);
+        // // Body
+        // line(0, 10, 0, 40);
+
+        // // Arms with rotation
+        // push();
+        // translate(0, 25);
         
-        // Arms with rotation
-        push();
-        translate(0, 25);
+        // // Right arm
+        // push();
+        // rotate(armAngle);
+        // line(0, 0, 20, 0);
+        // circle(20, 0, 4);
+        // pop();
         
-        // Right arm
-        push();
-        rotate(armAngle);
-        line(0, 0, 20, 0);
-        circle(20, 0, 4);
-        pop();
+        // // Left arm
+        // push();
+        // rotate(-armAngle);
+        // line(0, 0, -20, 0);
+        // circle(-20, 0, 4);
+        // pop();
         
-        // Left arm
-        push();
-        rotate(-armAngle);
-        line(0, 0, -20, 0);
-        circle(-20, 0, 4);
-        pop();
+        // pop();
         
-        pop();
+        // // Legs with rotation
+        // push();
+        // translate(0, 40); // Move to hip pivot point
         
-        // Legs with rotation
-        push();
-        translate(0, 40); // Move to hip pivot point
+        // // Right leg
+        // push();
+        // rotate(legAngle);
+        // line(0, 0, 15, 20);
+        // line(15, 20, 20, 20);
+        // pop();
         
-        // Right leg
-        push();
-        rotate(legAngle);
-        line(0, 0, 15, 20);
-        line(15, 20, 20, 20);
-        pop();
-        
-        // Left leg
-        push();
-        rotate(-legAngle);
-        line(0, 0, -15, 20);
-        line(-15, 20, -20, 20);
-        pop();
-        
-        pop();
+        // // Left leg
+        // push();
+        // rotate(-legAngle);
+        // line(0, 0, -15, 20);
+        // line(-15, 20, -20, 20);
+        // pop();
+        image(this.image, 0, 0, 100, 100);
+
+        // pop();
         
         pop();
     }

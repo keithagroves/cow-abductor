@@ -21,13 +21,17 @@ class Lander {
     this.thrust = 0.01;
     this.drag = 0.999;
     this.topSpeed = 1000;
-
+    this.image = loadImage("./ship.png");
+    this.imagethrust = loadImage("./shipflame.png");
+    this.imagethrust2 = loadImage("./flame2.png");
+    
     this.reset();
   }
 
   reset() {
     this.vel = createVector(0, 0);
-    this.pos = createVector(110, 150);
+    this.pos = createVector(0, 0);
+    
     this.rotation = this.targetRotation = -90;
     this.scale = 0.8;
     this.active = true;
@@ -71,6 +75,40 @@ class Lander {
     print("setting nearest planet")
     }
   }
+
+  predictTrajectory() {
+    let points = [];
+    let simPos = this.pos.copy();
+    let simVel = this.vel.copy();
+    
+    // Simulate next 100 steps
+    for(let i = 0; i < 100; i++) {
+      // Calculate gravity at this point
+      let gravityVector = createVector(0, 0);
+      
+      for (let planet of planets) {
+        let dx = planet.center.x - simPos.x;
+        let dy = planet.center.y - simPos.y;
+        let distSq = dx * dx + dy * dy;
+        let smoothing = 1000;
+        let adjustedDist = Math.pow(distSq, 0.85) + smoothing;
+        let force = planet.gravity / adjustedDist;
+        
+        gravityVector.add(createVector(dx, dy).normalize().mult(force));
+      }
+      
+      // Update simulated velocity and position
+      simVel.add(gravityVector);
+      simPos.add(simVel);
+      
+      // Store point
+      points.push(simPos.copy());
+      
+
+    }
+    
+    return points;
+  }
   update() {
     if (!this.active) return;
 
@@ -80,20 +118,21 @@ class Lander {
     // Calculate gravitational forces from all planets
     let gravityVector = createVector(0, 0);
     for (let planet of planets) {
-      if(this.nearestPlanet === planet){
+      // if(this.nearestPlanet === planet){
         let dx = planet.center.x - this.pos.x;
         let dy = planet.center.y - this.pos.y;
         let distSq = dx * dx + dy * dy;
         // let dist = sqrt(distSq);
-        
+        let smoothing = 10000; // Increase for more gradual effec
+        let adjustedDist =  distSq + smoothing;
         // G * M / r^2 (simplified gravitational formula)
         // Adjust gravitationalStrength to control the force
         let gravitationalStrength = planet.gravity;
-        let force = gravitationalStrength / distSq;
+        let force = gravitationalStrength /adjustedDist// since distSq is already squared
         
         // Create normalized direction vector and multiply by force
         gravityVector.add(createVector(dx, dy).normalize().mult(force));
-      }
+      // }
     }
     
     // Apply gravitational forces
@@ -137,38 +176,45 @@ class Lander {
     if (this.fuel < 0) this.fuel = 0;
     this.thrustLevel = this.thrusting;
   }
-
+   flip = false;
   render() {
     push();
     translate(this.pos.x, this.pos.y);
     scale(this.scale);
     rotate(this.rotation);
-
+    let sizeDiv = 5;
     // Body
     stroke(255);
     noFill();
-    beginShape();
-    vertex(-10, -5);
-    vertex(10, -5);
-    vertex(10, 10);
-    vertex(-10, 10);
-    endShape(CLOSE);
+    if (this.thrusting > 0 && this.active && this.fuel > 0) {
 
+      if(frameCount % 3 == 0){
+        this.flip = !this.flip;
+      }
+      if(this.flip){
+        image(this.imagethrust,  -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
+      }
+      else{
+        image(this.imagethrust2,  -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
+      }
+
+      
+    } else{
+    // beginShape();
+    // vertex(-10, -5);
+    // vertex(10, -5);
+    // vertex(10, 10);
+    // vertex(-10, 10);
+    // endShape(CLOSE);
+    
+    image(this.image, -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
+    }
     // Landing legs
-    line(-10, 10, -15, 15);
-    line(10, 10, 15, 15);
+    // line(-10, 10, -15, 15);
+    // line(10, 10, 15, 15);
 
     // Thrust animation
-    if (this.thrusting > 0 && this.active && this.fuel > 0) {
-      let flameSize = this.thrusting * 20;
-      let baseFlameSize = 11;
-      let range = 20;
 
-      stroke(random(200, 250), random(150, 200), random(100));
-      for (let i = 0; i < 4; i++) {
-        line(0, 11, random(-range, range), baseFlameSize + flameSize);
-      }
-    }
 
     // Tractor beam
     if (this.abducting) {
@@ -176,9 +222,22 @@ class Lander {
     }
     noStroke();
     fill(255, 255, 0, 50);
-    ellipse(0, 5, 100, 100);
+   // ellipse(0, 5, 100, 100);
 
     pop();
+    if(this.active) {
+      let trajectoryPoints = this.predictTrajectory();
+      push();
+      stroke(255, 100); // Semi-transparent white
+      strokeWeight(1);
+      noFill();
+      beginShape();
+      for(let point of trajectoryPoints) {
+        vertex(point.x, point.y);
+      }
+      endShape();
+      pop();
+    }
   }
 
   abduct() {

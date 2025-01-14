@@ -1,16 +1,7 @@
 /*********************************************************
- *                   GAME CONSTANTS
- *********************************************************/
-const WAITING = 0;
-const PLAYING = 1;
-const LANDED = 2;
-const CRASHED = 3;
-const GAMEOVER = 4;
-
-/*********************************************************
  *                   GLOBALS
  *********************************************************/
-let gameState = WAITING;
+let gameState = GAME_STATES.WAITING;
 let score = 0;
 let lander;
 let cows = [];
@@ -121,27 +112,39 @@ function setup() {
     stars.push({
       x: random(width),
       y: random(height),
-      brightness: random(100, 255),
+      brightness: random(100, 500),
     });
   }
-  let sun = createVector(5000, -100);
+  let sun = createVector(10000, -100);
   // Create some planets (pushing them into the planets array)
-  let planetCenter1 = createVector(width / 2, height / 2,);
+  let planetCenter1 = createVector(0, height / 2,);
   let planetCenter2 = createVector(width, -200);
   let blackhole = createVector(width/2, -2000);
   let bigPlanet = createVector(-1000, -1000);
+  let density = 2000;
 
+  let distanceBetween = 3000;
+  let starting = distanceBetween*4;
   // claim the planets
-  planets.push(new Planet(planetCenter1, 250, 50, 180, color(100, 255, 100), 500, sun));
-  planets.push(new Planet(createVector(1000, 2000), .001, 1, 3, color(255, 255, 255), 500, sun));
-  planets.push(new Planet(planetCenter2, 250, 50, 180, color(255, 0, 200), 500, sun));
-  planets.push(new Planet(blackhole, 100, 10, 30, color(255), 5000, sun, color(0)));
-  planets.push(new Planet(bigPlanet, 599, 50, 50, color(200, 0, 200), 1000,sun));
-  planets.push(new Planet(sun.copy(), 1000, 50, 180, color(255, 255, 0), 5000, sun));
+  planets.push(new Planet(createVector(0, 0), 255, 255, 255, density,starting, sun));
+  starting+=distanceBetween;
+  planets.push(new Planet(createVector(0, 0), 500, 255, 255, density, starting,sun));
+  starting+=distanceBetween;
+
+  planets.push(new Planet(createVector(0, 0), 500, 50, 180, density,starting, sun));
+  starting+=distanceBetween;
+
+  planets.push(new Planet(createVector(0, 0), 500, 255, 30, density, starting, sun));
+  starting+=distanceBetween;
+
+  planets.push(new Planet(createVector(0, 0), 599, 50, 50, density,starting , sun));
+  starting+=distanceBetween;
+
+  planets.push(new Planet(sun.copy(), 3000, 255, 180, 2000, 0, sun));
 
   // center, baseRadius, noiseIntensity, numPoints, strokeColor
   planets.push(
-    new Planet(createVector(-2000, 1000), 500, 100, 400, color(0, 255, 100), 500,sun)
+    new Planet(createVector(-5000, 1000), 500, 100, 400, density, 500,2000,sun)
   );
 
   resetGame();
@@ -179,16 +182,17 @@ function drawMinimap() {
       minimapBuffer.noStroke();
       minimapBuffer.fill(planet.strokeColor);
       let minimapRadius = max(4, planet.baseRadius * mapScale);
-      minimapBuffer.circle(minimapX, minimapY, minimapRadius);
+      minimapBuffer.circle(minimapX, minimapY, minimapRadius*2);
 
       // Draw orbit paths
       minimapBuffer.stroke(planet.strokeColor, 50);
       minimapBuffer.noFill();
       let orbitRadius = planet.orbitRadius * mapScale;
+      let planetRadius = 0
       minimapBuffer.ellipse(
         centerX + (planet.orbitCenter.x - lander.pos.x) * mapScale, 
         centerY + (planet.orbitCenter.y - lander.pos.y) * mapScale, 
-        orbitRadius * 2, orbitRadius * 2
+        orbitRadius * 2 + planetRadius, orbitRadius * 2 + planetRadius
       );
     }
 
@@ -238,7 +242,7 @@ function draw() {
   drawStarField();
 
   push();
-  if (gameState === PLAYING) {
+  if (gameState === GAME_STATES.PLAYING) {
     updateView();
     translate(view.x, view.y);
     scale(view.scale);
@@ -251,13 +255,13 @@ function draw() {
     
   }
 
-  // Update and draw lander if we're not waiting
-  if (gameState !== WAITING) {
+  // Update and draw lander if we're not GAME_STATES.WAITING
+  if (gameState !== GAME_STATES.WAITING) {
     lander.update();
     // Remove console.log and fix function call by passing required parameters
     if(checkCollisions(lander, planets)){ 
       lander.crash();
-      gameState = CRASHED;
+      gameState = GAME_STATES.CRASHED;
     }
     lander.render();
   }
@@ -292,7 +296,7 @@ function windowResized() {
 function resetGame() {
   initializeCows();
   lander = new Lander();
-  gameState = WAITING;
+  gameState = GAME_STATES.WAITING;
   score = 0;
   startTime = millis();
   view.scale = 1;
@@ -329,40 +333,93 @@ function initializeCows() {
  *                   VIEW & CAMERA
  *********************************************************/
 function updateView() {
+  // 1) Decide how much to zoom based on proximity to planet
   let minDistance = Infinity;
+  let closestPlanet;
   for (let planet of planets) {
     let distToCenter = dist(lander.pos.x, lander.pos.y, planet.center.x, planet.center.y);
-    let approximateSurfaceDistance = max(0, distToCenter - (planet.baseRadius+100))
-    minDistance = min(minDistance, approximateSurfaceDistance);
+    if (distToCenter < minDistance) {
+      minDistance = distToCenter;
+      closestPlanet = planet;
+    }
   }
+  let approximateSurfaceDistance = max(0, minDistance - (closestPlanet.baseRadius + 100));
+  minDistance = min(minDistance, approximateSurfaceDistance);
 
-  const ZOOM_THRESHOLD = 100; 
-  const MAX_ZOOM = 3;        
-  const MIN_ZOOM = 1;        
+  const ZOOM_THRESHOLD = 500;
+  const MAX_ZOOM = 2;
+  const MIN_ZOOM = .7;
 
   if (minDistance < ZOOM_THRESHOLD) {
-    // Smoothly interpolate zddoom based on distance
     let zoomFactor = map(minDistance, 0, ZOOM_THRESHOLD, MAX_ZOOM, MIN_ZOOM);
-    view.scale += (zoomFactor - view.scale) * 0.1; // Smooth transition
-  } else if (view.scale > MIN_ZOOM) {
+    view.scale += (zoomFactor - view.scale) * 0.1;
+  } else {
     view.scale += (MIN_ZOOM - view.scale) * 0.1;
   }
 
-  // Camera movement
-  let targetX = -lander.pos.x * view.scale + width / 2;
-  let targetY = -lander.pos.y * view.scale + height * 0.4;
-  view.x += (targetX - view.x) * 0.1;
-  view.y += (targetY - view.y) * 0.1;
+  // 2) Where to center the camera: always on the lander
+  let desiredX = -lander.pos.x * view.scale + width / 2;
+  let desiredY = -lander.pos.y * view.scale + height / 2;
+
+  // Smoothly interpolate to avoid abrupt jumps
+  let easing = 0.1;
+  view.x += (desiredX - view.x) * easing;
+  view.y += (desiredY - view.y) * easing;
+
+  // (Optional) clamp camera so you never see beyond the world edges
+  // let clampDist = 5000;
+  // view.x = constrain(lander.x, -clampDist, clampDist);
+  // view.y = constrain(lander.y, -clampDist, clampDist);
 }
+
 /*********************************************************
  *                   DRAW HELPERS
  *********************************************************/
+let constellations = [];
+
 function drawStarField() {
+  // Just a guard in case constellations gets huge
+
+
+  // Every 10 frames, pick a random star from stars[]
+  if (frameCount % 100 === 0) {
+    // use floor() or int() to be safe if random() is fractional
+    let r = floor(random(stars.length));
+    constellations = [stars[r]];
+    for(star of stars){
+      if(star != stars[r]){
+        distToStar = dist(star.x, star.y, stars[r].x, stars[r].y);
+        if(distToStar < 100){
+          constellations.push(star);
+        }
+      }
+    }
+  }
+
+  // Draw all stars as points
   strokeWeight(1);
   for (let star of stars) {
     stroke(star.brightness);
     point(star.x, star.y);
   }
+
+  // Now draw a “constellation line” connecting the stars in constellations[]
+  stroke(255, 255,255, 100 - frameCount/10 % 255);
+  noFill();
+  strokeWeight(2);
+  if(frameCount/10 % 255 > 250){
+    if (constellations.length >= 3) {
+      constellations = [];
+      console.log('reset');
+    }
+  }
+  beginShape();
+  for (let cstar of constellations) {
+    if (cstar) {
+      vertex(cstar.x, cstar.y);
+    }
+  }
+  endShape();
 }
 function checkCollisions(lander, planets) {
   if (!lander.active) {
@@ -423,19 +480,19 @@ function checkCollisions(lander, planets) {
       lander.altitude = min(lander.altitude, distance);
       
       // Check for collision (using lander radius as threshold)
-      if (distance < lander.radius && gameState !== LANDED) {
+      if (distance < lander.radius && gameState !== GAME_STATES.LANDED) {
         collisionDetected = true;
         // Check if this is a safe landing
         let isSafeLanding = checkSafeLanding(lander, p1, p2);
         
         if (isSafeLanding) {
           lander.land();
-          gameState = LANDED;
+          gameState = GAME_STATES.LANDED;
           score += 100;
           return false
         } else {
           lander.crash();
-          gameState = CRASHED;
+          gameState = GAME_STATES.CRASHED;
         }
         break;
       }
@@ -606,16 +663,16 @@ function drawGameStateMessages() {
   textAlign(CENTER);
   textSize(24);
   switch (gameState) {
-    case WAITING:
+    case GAME_STATES.WAITING:
       text("CLICK OR PRESS ANY KEY TO START", width / 2, height / 2);
       break;
-    case LANDED:
+    case GAME_STATES.LANDED:
       text("LANDED SAFELY!", width / 2, height / 2);
       break;
-    case CRASHED:
+    case GAME_STATES.CRASHED:
       text("CRASHED!", width / 2, height / 2);
       break;
-    case GAMEOVER:
+    case GAME_STATES.GAMEOVER:
       text(`GAME OVER\nFinal Score: ${score}`, width / 2, height / 2);
       break;
   }
@@ -625,8 +682,8 @@ function drawGameStateMessages() {
  *                   INPUT
  *********************************************************/
 function keyPressed() {
-  if (gameState === WAITING) {
-    gameState = PLAYING;
+  if (gameState === GAME_STATES.WAITING) {
+    gameState = GAME_STATES.PLAYING;
     // Resume audio context and start background music
     userStartAudio().then(() => {
       if (backgroundMusic && !backgroundMusic.isPlaying()) {
@@ -673,7 +730,7 @@ function keyReleased() {
 }
 
 function mousePressed() {
-  if (gameState === WAITING) {
+  if (gameState === GAME_STATES.WAITING) {
     gameState = PLAYING;
     // Resume audio context and start background music
     userStartAudio().then(() => {

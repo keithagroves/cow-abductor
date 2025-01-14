@@ -1,5 +1,5 @@
 class Planet {
-  constructor(center, baseRadius, noiseIntensity, numPoints, strokeColor, gravity,sun, fillColor) {
+  constructor(center, baseRadius, noiseIntensity, numPoints, density, orbitRadius,sun) {
   
     this.orbitCenter = sun;
     console.log(this.orbitCenter);
@@ -8,25 +8,23 @@ class Planet {
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
     this.numPoints = numPoints;
-    this.strokeColor = strokeColor;
-    if(!fillColor)
-    this.fillColor = strokeColor;
-    else  
-    this.fillColor = fillColor;
-    this.gravity = gravity;
+    this.strokeColor =color(numPoints, noiseIntensity, baseRadius/density , density/ 10 );
+    this.fillColor = color(numPoints, noiseIntensity, baseRadius/density , density/10 );;
+    this.gravity = density;
    // Add orbital parameters
     if(this.center.x != sun.x && this.center.y != sun.y){
-    this.orbitRadius = random(2000, 10000);  // Distance from orbit center
+    this.orbitRadius = orbitRadius  // Distance from orbit center
     this.orbitSpeed = random(0.001, 0.002);   // Angular velocity
-    this.orbitAngle = random(360);         // Starting angle
-    this.orbitEccentricity = random(0, 0.3); // 0 = circle, higher = more elliptical
+    this.orbitAngle = random(360)    // Starting angle
+    this.orbitEccentricity =0 // 0 = circle, higher = more elliptical
     } else {
       this.isSun = true;
     }
 
     this.landscape = this.generateLandscape();
 
-    this.alien = new Alien(this.center, baseRadius, strokeColor);
+    this.alien = new Alien(this.center, baseRadius, this.strokeColor);
+    
 
   }
   update() {
@@ -94,18 +92,19 @@ class Planet {
 
   draw() {
     // Draw orbit path
-    push();
-    stroke(this.strokeColor, 50); // Semi-transparent orbit line
-    noFill();
-    beginShape();
-    for (let a = 0; a < 360; a += 5) {
-      let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(a));
-      let x = this.orbitCenter.x + r * cos(a);
-      let y = this.orbitCenter.y + r * sin(a);
-      vertex(x, y);
-    }
-    endShape(CLOSE);
-    pop();
+    // push();
+    // stroke(this.strokeColor, 50); // Semi-transparent orbit line
+    // noFill();
+    // beginShape();
+    // for (let a = 0; a < 360; a += 5) {
+    //   let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(a));
+    //   let x = this.orbitCenter.x + r * cos(a);
+    //   let y = this.orbitCenter.y + r * sin(a);
+    //   vertex(x, y);
+    // }
+    // endShape(CLOSE);
+
+    // pop();
 
     // Draw planet
     stroke(this.strokeColor);
@@ -126,6 +125,12 @@ class Planet {
     }
     strokeWeight(1);
     this.alien.draw();
+    // fill sky blue
+    noStroke();
+    fill(0, 150, 255, 50); 
+    let largeEnoughToHaveAnAtmosphere = this.baseRadius > 1000;
+    if(largeEnoughToHaveAnAtmosphere)
+    circle(this.center.x, this.center.y, this.baseRadius * 2.2);
   }
 }
 
