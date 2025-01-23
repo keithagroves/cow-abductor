@@ -18,6 +18,8 @@ let rocketSound;
 let thrustPlaying = false;
 let ROTATE_LEFT = false;
 let ROTATE_RIGHT = false;
+let timeScale = 1;
+let timeSlider;
 /*********************************************************
  *                   P5 LIFE CYCLE
  *********************************************************/
@@ -102,6 +104,11 @@ function setup() {
   angleMode(DEGREES);
   rocketSound = new RocketSound();
 
+  // Create time control slider
+  timeSlider = createSlider(0.1, 5, 1, 0.1);
+  timeSlider.position(width - 220, 30);
+  timeSlider.style('width', '200px');
+
   // Initialize audio context with user interaction
   if (getAudioContext().state !== 'running') {
     getAudioContext().suspend();
@@ -121,30 +128,30 @@ function setup() {
   let planetCenter2 = createVector(width, -200);
   let blackhole = createVector(width/2, -2000);
   let bigPlanet = createVector(-1000, -1000);
-  let density = 2000;
+  let density = 50000;
 
   let distanceBetween = 3000;
   let starting = distanceBetween*4;
   // claim the planets
-  planets.push(new Planet(createVector(0, 0), 255, 255, 255, density,starting, sun));
+  planets.push(new Planet(createVector(0, 0), 800, 255, 255, density,starting, sun));
   starting+=distanceBetween;
-  planets.push(new Planet(createVector(0, 0), 500, 255, 255, density, starting,sun));
-  starting+=distanceBetween;
-
-  planets.push(new Planet(createVector(0, 0), 500, 50, 180, density,starting, sun));
+  planets.push(new Planet(createVector(0, 0), 1000, 255, 255, density, starting,sun));
   starting+=distanceBetween;
 
-  planets.push(new Planet(createVector(0, 0), 500, 255, 30, density, starting, sun));
+  planets.push(new Planet(createVector(0, 0), 1200, 50, 180, density,starting, sun));
   starting+=distanceBetween;
 
-  planets.push(new Planet(createVector(0, 0), 599, 50, 50, density,starting , sun));
+  planets.push(new Planet(createVector(0, 0), 900, 255, 30, density, starting, sun));
   starting+=distanceBetween;
 
-  planets.push(new Planet(sun.copy(), 3000, 255, 180, 2000, 0, sun));
+  planets.push(new Planet(createVector(0, 0), 1100, 50, 50, density,starting , sun));
+  starting+=distanceBetween;
+
+  planets.push(new Planet(sun.copy(), 4000, 255, 180, 2000, 0, sun));
 
   // center, baseRadius, noiseIntensity, numPoints, strokeColor
   planets.push(
-    new Planet(createVector(-5000, 1000), 500, 100, 400, density, 500,2000,sun)
+    new Planet(createVector(-5000, 1000), 1000, 100, 400, density, 500,2000,sun)
   );
 
   resetGame();
@@ -238,6 +245,9 @@ function drawMinimap() {
   image(minimapBuffer, mapX, mapY);
 }
 function draw() {
+  // Update time scale from slider
+  timeScale = timeSlider.value();
+  
   background(0);
   drawStarField();
 
@@ -250,35 +260,28 @@ function draw() {
 
   // Draw every planet in the array
   for (let planet of planets) {
-    planet.update();
+    planet.update(timeScale);
     planet.draw();
-    
   }
 
   // Update and draw lander if we're not GAME_STATES.WAITING
   if (gameState !== GAME_STATES.WAITING) {
-    lander.update();
-    // Remove console.log and fix function call by passing required parameters
-    if(checkCollisions(lander, planets)){ 
-      lander.crash();
-      gameState = GAME_STATES.CRASHED;
-    }
+    lander.update(timeScale);
     lander.render();
   }
 
   // Update and render all cows
   for (let cow of cows) {
-    cow.update();
+    cow.update(timeScale);
     cow.render();
   }
 
   pop();
   if(ROTATE_LEFT){
-    lander.rotate(-.2);
+    lander.rotate(-.2 * timeScale);
   }
   else if (ROTATE_RIGHT){
-    lander.rotate(.2);
-    
+    lander.rotate(.2 * timeScale);
   }
   drawHUD();
   drawGameStateMessages();
@@ -403,7 +406,7 @@ function drawStarField() {
     point(star.x, star.y);
   }
 
-  // Now draw a “constellation line” connecting the stars in constellations[]
+  // Now draw a "constellation line" connecting the stars in constellations[]
   stroke(255, 255,255, 100 - frameCount/10 % 255);
   noFill();
   strokeWeight(2);
@@ -657,6 +660,10 @@ function drawHUD() {
   text(`Research: ${research}`, 20, 90);
   text("X: " + lander.pos.x.toFixed(2), 20, 110);
   text("Y: " + lander.pos.y.toFixed(2), 20, 130);
+  
+  // Add time scale display
+  textAlign(RIGHT);
+  text(`Time Scale: ${timeScale.toFixed(1)}x`, width - 230, 45);
 }
 
 function drawGameStateMessages() {
@@ -731,7 +738,7 @@ function keyReleased() {
 
 function mousePressed() {
   if (gameState === GAME_STATES.WAITING) {
-    gameState = PLAYING;
+    gameState = GAME_STATES.PLAYING;
     // Resume audio context and start background music
     userStartAudio().then(() => {
       if (backgroundMusic && !backgroundMusic.isPlaying()) {

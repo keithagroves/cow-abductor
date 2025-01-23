@@ -109,30 +109,24 @@ class Lander {
     
     return points;
   }
-  update() {
+  update(timeScale = 1) {
     if (!this.active) return;
 
     // Smooth rotation
-    this.rotation += (this.targetRotation - this.rotation) * 0.3;
+    this.rotation += (this.targetRotation - this.rotation) * 0.3 * timeScale;
 
     // Calculate gravitational forces from all planets
     let gravityVector = createVector(0, 0);
     for (let planet of planets) {
-      // if(this.nearestPlanet === planet){
-        let dx = planet.center.x - this.pos.x;
-        let dy = planet.center.y - this.pos.y;
-        let distSq = dx * dx + dy * dy;
-        // let dist = sqrt(distSq);
-        let smoothing = 10000; // Increase for more gradual effec
-        let adjustedDist =  distSq + smoothing;
-        // G * M / r^2 (simplified gravitational formula)
-        // Adjust gravitationalStrength to control the force
-        let gravitationalStrength = planet.gravity;
-        let force = gravitationalStrength /adjustedDist// since distSq is already squared
-        
-        // Create normalized direction vector and multiply by force
-        gravityVector.add(createVector(dx, dy).normalize().mult(force));
-      // }
+      let dx = planet.center.x - this.pos.x;
+      let dy = planet.center.y - this.pos.y;
+      let distSq = dx * dx + dy * dy;
+      let smoothing = 0;
+      let adjustedDist = distSq + smoothing;
+      let gravitationalStrength = planet.gravity;
+      let force = gravitationalStrength / adjustedDist;
+      
+      gravityVector.add(createVector(dx, dy).normalize().mult(force * timeScale));
     }
     
     // Apply gravitational forces
@@ -146,12 +140,9 @@ class Lander {
         thrustVector.x * cos(angle) - thrustVector.y * sin(angle),
         thrustVector.x * sin(angle) + thrustVector.y * cos(angle)
       );
-      this.vel.add(rotatedThrust);
-      this.fuel -= 0.2 * this.thrusting;
+      this.vel.add(rotatedThrust.mult(timeScale));
+      this.fuel -= 0.2 * this.thrusting * timeScale;
     }
-
-    // Apply physics
-    //this.vel.mult(this.drag);
 
     // Limit speed
     let speed = this.vel.mag();
@@ -160,7 +151,7 @@ class Lander {
     }
 
     // Update position
-    this.pos.add(this.vel);
+    this.pos.add(this.vel.copy().mult(timeScale));
 
     // Update collision points
     this.bottomLeft = createVector(

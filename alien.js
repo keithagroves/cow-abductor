@@ -14,9 +14,9 @@ class Alien {
         this.image = loadImage('unnamed.png');
     }
 
-    update() {
+    update(timeScale = 1) {
         // Update position around the orbit
-        this.angle += this.speed;
+        this.angle += this.speed * timeScale;
         let x = this.center.x + cos(this.angle) * this.orbitRadius;
         let y = this.center.y + sin(this.angle) * this.orbitRadius;
         this.pos = createVector(x, y);

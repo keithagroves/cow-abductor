@@ -1,4 +1,3 @@
-
 class Cow {
   constructor(x, y, cowImage) {
     this.pos = createVector(x, y);
@@ -14,50 +13,39 @@ class Cow {
     this.origin = createVector(x, y);
   }
 
-  update() {
+  update(timeScale = 1) {
     if (this.state === "carried") {
-      // Accelerate toward the Lander’s position rather than snapping to it
-
       let dx = lander.pos.x - this.pos.x;
       let dy = lander.pos.y - this.pos.y;
 
       // "Pull" the cow toward the Lander
-      this.vel.x += dx * this.pullStrength;
-      this.vel.y += dy * this.pullStrength;
+      this.vel.x += dx * this.pullStrength * timeScale;
+      this.vel.y += dy * this.pullStrength * timeScale;
 
       // Limit maximum speed
       let speed = this.vel.mag();
       if (speed > this.maxSpeed) {
-        // Scale down velocity so it doesn't exceed maxSpeed
         this.vel.mult(this.maxSpeed / speed);
       }
 
       // Move the cow by its velocity
-        this.pos.add(this.vel);
-  
-        
-      
+      this.pos.add(this.vel.copy().mult(timeScale));
     } else if (this.state === "onGround") {
-       // Accelerate toward the Lander’s position rather than snapping to it
-
       let dx = this.origin.x - this.pos.x;
       let dy = this.origin.y - this.pos.y;
 
-      // "Pull" the cow toward the Lander
-      this.vel.x += dx * this.pullStrength*2;
-      this.vel.y += dy * this.pullStrength*2;
-      
+      // "Pull" the cow toward the origin
+      this.vel.x += dx * this.pullStrength * 2 * timeScale;
+      this.vel.y += dy * this.pullStrength * 2 * timeScale;
 
       // Limit maximum speed
       let speed = this.vel.mag();
       if (speed > this.maxSpeed) {
-        // Scale down velocity so it doesn't exceed maxSpeed
         this.vel.mult(this.maxSpeed / speed);
       }
 
       // Move the cow by its velocity
-        this.pos.add(this.vel);
-
+      this.pos.add(this.vel.copy().mult(timeScale));
     }
   }
 

@@ -22,15 +22,15 @@ class Planet {
     }
 
     this.landscape = this.generateLandscape();
-
+    this.snakeShapes = this.generateSnakeShapes();
     this.alien = new Alien(this.center, baseRadius, this.strokeColor);
     
 
   }
-  update() {
+  update(timeScale = 1) {
     // Update orbit angle
-    this.orbitAngle += this.orbitSpeed;
-    this.alien.update();
+    this.orbitAngle += this.orbitSpeed * timeScale;
+    this.alien.update(timeScale);
     
     // Calculate new position using elliptical orbit
     let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(this.orbitAngle));
@@ -90,6 +90,38 @@ class Planet {
     return points;
   }
 
+  generateSnakeShapes() {
+    let shapes = [];
+    let numShapes = floor(random(2, 5));
+    
+    for (let i = 0; i < numShapes; i++) {
+      let points = [];
+      let numPoints = floor(random(3, 6));
+      let startAngle = random(360);
+      let radius = this.baseRadius * random(0.4, 0.8);
+      
+      // Generate control points for the Bézier curve
+      for (let j = 0; j < numPoints; j++) {
+        let angle = startAngle + (360 / numPoints) * j;
+        let r = radius + random(-20, 20);
+        let x = r * cos(angle);
+        let y = r * sin(angle);
+        points.push({x, y});
+      }
+      
+      shapes.push({
+        points: points,
+        color: color(
+          random(100, 255),
+          random(100, 255),
+          random(100, 255),
+          150
+        )
+      });
+    }
+    return shapes;
+  }
+
   draw() {
     // Draw orbit path
     // push();
@@ -114,6 +146,35 @@ class Planet {
       vertex(p.x, p.y);
     }
     endShape();
+
+    // Draw snake shapes
+    push();
+    translate(this.center.x, this.center.y);
+    for (let shape of this.snakeShapes) {
+      beginShape();
+      noStroke();
+      fill(shape.color);
+      
+      // Draw closed Bézier curve
+      let points = shape.points;
+      vertex(points[0].x, points[0].y);
+      
+      for (let i = 0; i < points.length; i++) {
+        let p1 = points[i];
+        let p2 = points[(i + 1) % points.length];
+        let p3 = points[(i + 2) % points.length];
+        
+        let cp1x = p1.x + (p2.x - p1.x) * 0.5;
+        let cp1y = p1.y + (p2.y - p1.y) * 0.5;
+        let cp2x = p2.x + (p3.x - p2.x) * 0.5;
+        let cp2y = p2.y + (p3.y - p2.y) * 0.5;
+        
+        bezierVertex(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+      }
+      
+      endShape(CLOSE);
+    }
+    pop();
 
     // Draw landing pad indicators
     stroke(255, 255, 0);
