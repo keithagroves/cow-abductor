@@ -7,6 +7,8 @@ let cargo = 0;
 let alienImage;
 let lander;
 let cows = [];
+let flora = [];
+let lasers = [];
 let planets = []; // This is our array of planets
 let base;
 let delivered = 0;
@@ -16,6 +18,9 @@ let stars = [];
 let cowImage;
 let view = { x: 0, y: 0, scale: 1, focusX: 0, focusY: 0 };
 let startTime;
+let lastDiagnosticLog = 0;
+let eventMessage = "";
+let eventMessageUntil = 0;
 let touchable = "ontouchstart" in window;
 let backgroundMusic=null;
 let shipImage;
@@ -24,8 +29,7 @@ let shipFlameImage2;
 let alienGroundImage;
 let rocketSound;
 let thrustPlaying = false;
-let ROTATE_LEFT = false;
-let ROTATE_RIGHT = false;
+const KEY_A = 65, KEY_D = 68, KEY_W = 87, KEY_S = 83;
 let timeScale = 1;
 let timeSlider;
 
@@ -324,22 +328,25 @@ function draw() {
   drawBurnParticles();
   lander.render(timeScale);
 
+  // Render plants under cows so glow blends nicely.
+  for (let plant of flora) {
+    plant.render();
+  }
+
   // Render all cows
   for (let cow of cows) {
     cow.render();
   }
 
+  updateAndDrawLasers(timeScale);
+
   pop();
-  if(gameState === GAME_STATES.PLAYING && ROTATE_LEFT){
-    lander.rotate(-.2 * timeScale);
-  }
-  else if (gameState === GAME_STATES.PLAYING && ROTATE_RIGHT){
-    lander.rotate(.2 * timeScale);
-  }
+  pollInput(timeScale);
   if (gameState !== GAME_STATES.WAITING) {
     drawHUD();
     drawMinimap();
   }
+  drawEventMessage();
   drawGameStateMessages();
 }
 
@@ -358,7 +365,9 @@ function resetGame() {
   resetShop();
   resetPlanetDiscoveries();
   initializeCows();
+  initializePlants();
   burnParticles = [];
+  lasers = [];
   // Spawn the player on the first non-sun planet so they start grounded near specimens.
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
   if (starter) {
@@ -371,6 +380,9 @@ function resetGame() {
   delivered = 0;
   research = 0;
   startTime = millis();
+  lastDiagnosticLog = millis();
+  eventMessage = "";
+  eventMessageUntil = 0;
   resetView();
 }
 
@@ -395,20 +407,19 @@ function assignPlanetNames() {
 }
 
 function liftOff() {
-  // Reactivate and nudge upward away from the nearest planet so we don't immediately re-collide.
-  // Note: refueling is base-only (handled in tryDeliver). Lift-off here just unlocks the ship.
+  // Reactivate the ship; the player has to thrust to actually take off. We
+  // only nudge the position a tiny bit "out the top of the ship" so the first
+  // collision check after PLAYING doesn't immediately re-land us. Also inherit
+  // the planet's orbital velocity so we don't appear to drift backward as the
+  // planet orbits on without us.
   lander.active = true;
-  if (lander.nearestPlanet) {
-    let dx = lander.pos.x - lander.nearestPlanet.center.x;
-    let dy = lander.pos.y - lander.nearestPlanet.center.y;
-    let d = sqrt(dx * dx + dy * dy);
-    if (d > 0) {
-      let kick = DEBUG.liftoffKick;
-      lander.vel.x = (dx / d) * kick;
-      lander.vel.y = (dy / d) * kick;
-      lander.pos.x += (dx / d) * (lander.radius + 5);
-      lander.pos.y += (dy / d) * (lander.radius + 5);
-    }
+  let upX = sin(lander.rotation);
+  let upY = -cos(lander.rotation);
+  lander.pos.x += upX * (lander.radius + 5);
+  lander.pos.y += upY * (lander.radius + 5);
+  if (lander.nearestPlanet && lander.nearestPlanet.getOrbitalVelocity) {
+    let orb = lander.nearestPlanet.getOrbitalVelocity();
+    lander.vel.set(orb.x, orb.y);
   }
   gameState = GAME_STATES.PLAYING;
 }
@@ -426,6 +437,11 @@ function tryDeliver() {
   research += payload;
   cargo = 0;
   cows = cows.filter((c) => c.state !== "stowed");
+  flora = flora.filter((p) => p.state !== "stowed");
+  showEvent(`Delivered ${payload} specimen${payload === 1 ? "" : "s"}  +${payload} research`);
+  if (delivered >= DELIVERY_GOAL) {
+    gameState = GAME_STATES.GAMEOVER;
+  }
 }
 
 function startGame() {
@@ -467,6 +483,19 @@ function initializeCows() {
   }
 }
 
+function initializePlants() {
+  flora = [];
+  for (let planet of planets) {
+    if (planet.isSun) continue;
+    let landablePoints = planet.landscape.filter((p) => p.landable);
+    if (landablePoints.length === 0) continue;
+    for (let i = 0; i < 5; i++) {
+      let point = random(landablePoints);
+      flora.push(new Plant(planet, point.angle, point.r + 12));
+    }
+  }
+}
+
 /*********************************************************
  *                   VIEW & CAMERA
  *********************************************************/
@@ -487,8 +516,79 @@ function updateWorld(timeScale = 1) {
     cow.update(timeScale);
   }
 
+  for (let plant of flora) {
+    plant.update(timeScale);
+  }
+
   updateBurnParticles(timeScale);
   updateDiscoveries();
+  logDiagnostics();
+}
+
+function logDiagnostics() {
+  if (millis() - lastDiagnosticLog < 10000) return;
+  lastDiagnosticLog = millis();
+  if (!lander) return;
+
+  let elapsed = ((millis() - startTime) / 1000).toFixed(1);
+  let speed = lander.vel.mag().toFixed(3);
+  let pos = `(${lander.pos.x.toFixed(0)}, ${lander.pos.y.toFixed(0)})`;
+  let vel = `(${lander.vel.x.toFixed(3)}, ${lander.vel.y.toFixed(3)})  |v|=${speed}`;
+
+  // Net gravity at the ship right now (sum of all planets).
+  let gx = 0, gy = 0;
+  let perPlanet = [];
+  for (let p of planets) {
+    let dx = p.center.x - lander.pos.x;
+    let dy = p.center.y - lander.pos.y;
+    let d = sqrt(dx * dx + dy * dy);
+    let force = p.gravity / max(1, d * d);
+    let ax = (dx / max(1, d)) * force;
+    let ay = (dy / max(1, d)) * force;
+    gx += ax;
+    gy += ay;
+    perPlanet.push({
+      name: p.name || (p.isSun ? "Sun" : "Planet"),
+      pos: `(${p.center.x.toFixed(0)}, ${p.center.y.toFixed(0)})`,
+      dist: d.toFixed(0),
+      pull: sqrt(ax * ax + ay * ay).toFixed(5),
+    });
+  }
+  let gMag = sqrt(gx * gx + gy * gy).toFixed(5);
+  // Sort planets by their current pull on the ship — dominant ones at the top.
+  perPlanet.sort((a, b) => parseFloat(b.pull) - parseFloat(a.pull));
+
+  // Atmospheric density summed across all planets at the ship's position.
+  let density = 0;
+  let perAtmo = [];
+  for (let p of planets) {
+    let d = p.atmosphericDensity(lander.pos.x, lander.pos.y);
+    density += d;
+    if (d > 0) {
+      perAtmo.push({ name: p.name || (p.isSun ? "Sun" : "Planet"), density: d.toFixed(4) });
+    }
+  }
+  let densityClamped = min(1, density);
+  let dragFactor = 1 - DEBUG.atmosphereDrag * densityClamped * timeScale;
+
+  console.log(`--- t=${elapsed}s ---`);
+  console.log(`ship pos: ${pos}`);
+  console.log(`ship vel: ${vel}`);
+  console.log(`net gravity: (${gx.toFixed(5)}, ${gy.toFixed(5)})  |g|=${gMag}`);
+  console.log(`atmosphere density: ${densityClamped.toFixed(4)}  drag factor/frame: ${dragFactor.toFixed(4)}`);
+  let leftKey  = keyIsDown(LEFT_ARROW)  || keyIsDown(KEY_A);
+  let rightKey = keyIsDown(RIGHT_ARROW) || keyIsDown(KEY_D);
+  let upKey    = keyIsDown(UP_ARROW)    || keyIsDown(KEY_W);
+  let spaceKey = keyIsDown(32);
+  console.log(`thrust: ${lander.thrusting} fuel: ${lander.fuel.toFixed(1)} rotation: ${lander.rotation.toFixed(1)}°  targetRot: ${lander.targetRotation.toFixed(1)}°`);
+  console.log(`keys held — left:${leftKey} right:${rightKey} up:${upKey} space:${spaceKey} mouse:${mouseIsPressed}`);
+  console.log(`DEBUG: atmoScale=${DEBUG.atmosphereScale} atmoDrag=${DEBUG.atmosphereDrag} planetScale=${DEBUG.planetRadiusScale} planetGravity=${DEBUG.planetGravity} planetSpacing=${DEBUG.planetSpacing}`);
+  console.log("gravity contributions (sorted by strength):");
+  console.table(perPlanet);
+  if (perAtmo.length > 0) {
+    console.log("atmospheres touching ship:");
+    console.table(perAtmo);
+  }
 }
 
 function updateBurnParticles(timeScale = 1) {
@@ -548,6 +648,92 @@ function emitBurnParticle(intensity) {
   });
 }
 
+const LASER_MAX_RANGE = 1800;
+const LASER_HIT_RADIUS = 36;
+
+function fireLaser(screenX, screenY) {
+  if (!lander || !lander.active) return;
+  if (gameState !== GAME_STATES.PLAYING) return;
+
+  let target = screenToWorld(screenX, screenY);
+  let dx = target.x - lander.pos.x;
+  let dy = target.y - lander.pos.y;
+  let d = sqrt(dx * dx + dy * dy);
+  if (d < 1) return;
+  let nx = dx / d;
+  let ny = dy / d;
+
+  let hitDist = LASER_MAX_RANGE;
+  let hitPlant = null;
+
+  // Closest plant whose center lies within LASER_HIT_RADIUS of the ray.
+  for (let plant of flora) {
+    if (plant.state !== "growing") continue;
+    let pdx = plant.pos.x - lander.pos.x;
+    let pdy = plant.pos.y - lander.pos.y;
+    let along = pdx * nx + pdy * ny;
+    if (along < 0 || along > hitDist) continue;
+    let perpX = pdx - nx * along;
+    let perpY = pdy - ny * along;
+    let perpD = sqrt(perpX * perpX + perpY * perpY);
+    if (perpD < LASER_HIT_RADIUS) {
+      hitDist = along;
+      hitPlant = plant;
+    }
+  }
+
+  // Terrain blocks the laser. Check the nearest planet, which is usually the one
+  // the player is hovering over and the only one within range anyway.
+  if (lander.nearestPlanet) {
+    let terrainHit = rayHitsTerrain(lander.pos, nx, ny, LASER_MAX_RANGE, lander.nearestPlanet);
+    if (terrainHit < hitDist) {
+      hitDist = terrainHit;
+      hitPlant = null;
+    }
+  }
+
+  let endX = lander.pos.x + nx * hitDist;
+  let endY = lander.pos.y + ny * hitDist;
+
+  lasers.push({ endX, endY, life: 1 });
+
+  if (hitPlant) hitPlant.zap();
+}
+
+function updateAndDrawLasers(timeScaleLocal = 1) {
+  if (lasers.length === 0) return;
+  push();
+  blendMode(ADD);
+  for (let i = lasers.length - 1; i >= 0; i--) {
+    let L = lasers[i];
+    L.life -= 0.12 * timeScaleLocal;
+    if (L.life <= 0) { lasers.splice(i, 1); continue; }
+
+    let sx = lander.pos.x;
+    let sy = lander.pos.y;
+    let ex = L.endX;
+    let ey = L.endY;
+    let life = L.life;
+
+    strokeWeight(10);
+    stroke(255, 60, 180, 60 * life);
+    line(sx, sy, ex, ey);
+    strokeWeight(5);
+    stroke(255, 120, 220, 160 * life);
+    line(sx, sy, ex, ey);
+    strokeWeight(1.5);
+    stroke(255, 230, 250, 255 * life);
+    line(sx, sy, ex, ey);
+
+    noStroke();
+    fill(255, 120, 220, 200 * life);
+    circle(ex, ey, 22 * life);
+    fill(255, 230, 250, 230 * life);
+    circle(ex, ey, 9 * life);
+  }
+  pop();
+}
+
 function drawBurnParticles() {
   noStroke();
   for (let p of burnParticles) {
@@ -567,8 +753,14 @@ function updateDiscoveries() {
     if (getSurfaceDistance(lander.pos, planet) < DISCOVERY_DISTANCE) {
       planet.discovered = true;
       score += 25;
+      showEvent(`Discovered ${planet.name}  +25 score`);
     }
   }
+}
+
+function showEvent(message, duration = 2800) {
+  eventMessage = message;
+  eventMessageUntil = millis() + duration;
 }
 
 function resetView() {
@@ -580,15 +772,21 @@ function resetView() {
 }
 
 function updateView() {
-  let surfaceDistance = getClosestSurfaceDistance();
-  let clampedDistance = constrain(surfaceDistance, 0, DEBUG.cameraZoomDistance);
-  let targetScale = map(
-    clampedDistance,
-    0,
-    DEBUG.cameraZoomDistance,
-    DEBUG.cameraMaxZoom,
-    DEBUG.cameraMinZoom
-  );
+  let targetScale;
+  if (DEBUG.zoomOverride > 0) {
+    // Manual zoom — debug flag forces a specific scale regardless of altitude.
+    targetScale = DEBUG.zoomOverride;
+  } else {
+    let surfaceDistance = getClosestSurfaceDistance();
+    let clampedDistance = constrain(surfaceDistance, 0, DEBUG.cameraZoomDistance);
+    targetScale = map(
+      clampedDistance,
+      0,
+      DEBUG.cameraZoomDistance,
+      DEBUG.cameraMaxZoom,
+      DEBUG.cameraMinZoom
+    );
+  }
 
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;
   view.focusX += (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
@@ -956,7 +1154,7 @@ function drawHUD() {
   text(`Altitude: ${floor(lander.altitude)}`, 20, 50);
   text(`Velocity: ${lander.vel.mag().toFixed(2)}`, 20, 70);
   text(`Cargo: ${cargo} / ${lander.maxCargo}`, 20, 90);
-  text(`Delivered: ${delivered}`, 20, 110);
+  text(`Delivered: ${delivered} / ${DELIVERY_GOAL}`, 20, 110);
   text(`Research: ${research}`, 20, 130);
   text(`Score: ${score}`, 20, 150);
   drawMissionReadout();
@@ -973,12 +1171,35 @@ function drawHUD() {
   drawShop();
 }
 
+function drawEventMessage() {
+  if (!eventMessage || millis() > eventMessageUntil) return;
+
+  let remaining = constrain((eventMessageUntil - millis()) / 500, 0, 1);
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(18);
+  let boxW = min(width - 40, max(320, textWidth(eventMessage) + 48));
+  let boxH = 44;
+  let x = width / 2 - boxW / 2;
+  let y = 74;
+  noStroke();
+  fill(0, 20, 34, 190 * remaining);
+  rect(x, y, boxW, boxH, 6);
+  stroke(80, 255, 220, 180 * remaining);
+  noFill();
+  rect(x, y, boxW, boxH, 6);
+  noStroke();
+  fill(210, 255, 240, 255 * remaining);
+  text(eventMessage, width / 2, y + boxH / 2);
+  pop();
+}
+
 function drawMissionReadout() {
   let nearest = getNearestPlanetInfo();
   let specimensRemaining = cows.filter((cow) => cow.state !== "stowed").length;
   let objective = cargo > 0
     ? "Land at base to deliver cargo"
-    : "Find specimens. Hold A to abduct.";
+    : "Click to zap plants. Hover above samples and hold SPACE to beam them up.";
 
   textAlign(LEFT);
   textSize(14);
@@ -990,7 +1211,7 @@ function drawMissionReadout() {
     text(`Nearest: ${bodyName} (${floor(nearest.distance)}m)`, 20, 200);
   }
   text(`Specimens remaining: ${specimensRemaining}`, 20, 220);
-  text("Controls: arrows rotate  |  up thrust  |  A abduct", 20, 240);
+  text("Controls: A/D or ←/→ rotate  |  W or ↑ thrust  |  Click to zap  |  Space to beam up", 20, 240);
 }
 
 function getNearestPlanetInfo() {
@@ -1121,16 +1342,16 @@ function drawGameStateMessages() {
       break;
     case GAME_STATES.LANDED:
       if (base && base.inRange(lander.pos)) {
-        text("AT BASE — CARGO DELIVERED, FULL TANK\nCLICK UPGRADES OR PRESS ANY KEY TO LIFT OFF", width / 2, height / 2 - 30);
+        text("AT BASE - FULL TANK\nCLICK UPGRADES OR PRESS ANY KEY TO LIFT OFF", width / 2, height / 2 - 30);
       } else {
-        text("LANDED — PRESS ANY KEY TO LIFT OFF", width / 2, height / 2);
+        text("LANDED - PRESS ANY KEY TO LIFT OFF", width / 2, height / 2);
       }
       break;
     case GAME_STATES.CRASHED:
       text("CRASHED! PRESS ANY KEY TO RESTART", width / 2, height / 2);
       break;
     case GAME_STATES.GAMEOVER:
-      text(`MISSION COMPLETE — ${delivered} cows delivered\nScore: ${score}\nPRESS ANY KEY TO RESTART`, width / 2, height / 2);
+      text(`MISSION COMPLETE - ${delivered} specimens delivered\nScore: ${score}\nPRESS ANY KEY TO RESTART`, width / 2, height / 2);
       break;
   }
   pop();
@@ -1153,33 +1374,61 @@ function keyPressed() {
     liftOff();
     return;
   }
-  if (keyCode === LEFT_ARROW) ROTATE_LEFT = true;
-  if (keyCode === RIGHT_ARROW) ROTATE_RIGHT = true;
-  if (keyCode === UP_ARROW) {
-    // Only fire the engines if there's actually fuel in the tank.
-    if (lander.fuel > 0) {
-      playThruster();
-      lander.setThrust(1);
-    }
-  }
-  if (key === "a" || key === "A") {
-    lander.abducting = true;
-  }
+  // Movement / beam are polled via keyIsDown in pollInput().
   if (key === "t" || key === "T") {
     setDebugValue("showTrajectory", !DEBUG.showTrajectory);
   }
 }
 
-function keyReleased() {
-  if (keyCode === UP_ARROW) {
-    lander.setThrust(0);
-     stopThruster();
+// Continuous input polling for the PLAYING state. Lets WASD and arrows be
+// pressed simultaneously without one overriding the other on key release.
+function pollInput(timeScale = 1) {
+  if (!lander || gameState !== GAME_STATES.PLAYING) return;
+
+  let leftHeld  = keyIsDown(LEFT_ARROW)  || keyIsDown(KEY_A);
+  let rightHeld = keyIsDown(RIGHT_ARROW) || keyIsDown(KEY_D);
+  if (leftHeld)  lander.rotate(-0.2 * timeScale);
+  if (rightHeld) lander.rotate( 0.2 * timeScale);
+
+  let thrustHeld = keyIsDown(UP_ARROW) || keyIsDown(KEY_W);
+  let wantThrust = thrustHeld && lander.fuel > 0;
+  if (wantThrust && !thrustPlaying) playThruster();
+  else if (!wantThrust && thrustPlaying) stopThruster();
+  lander.setThrust(wantThrust ? 1 : 0);
+
+  // Tractor beam fires straight down from the ship's local frame while space is held.
+  lander.abducting = keyIsDown(32);
+}
+
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - view.x) / view.scale,
+    y: (sy - view.y) / view.scale
+  };
+}
+
+// Cast a ray from origin in unit direction (dirX, dirY) and return the distance
+// to the first terrain segment hit on the given planet, capped at maxRange.
+function rayHitsTerrain(origin, dirX, dirY, maxRange, planet) {
+  if (!planet || !planet.landscape) return maxRange;
+  let segs = planet.landscape;
+  let closest = maxRange;
+  for (let i = 0; i < segs.length - 1; i++) {
+    let p1 = segs[i];
+    let p2 = segs[i + 1];
+    let vx = p2.x - p1.x;
+    let vy = p2.y - p1.y;
+    let wx = origin.x - p1.x;
+    let wy = origin.y - p1.y;
+    let denom = vx * dirY - vy * dirX;
+    if (Math.abs(denom) < 1e-9) continue; // parallel
+    let t = (wx * vy - vx * wy) / denom;
+    if (t < 0 || t >= closest) continue;
+    let s = (wx * dirY - dirX * wy) / denom;
+    if (s < 0 || s > 1) continue;
+    closest = t;
   }
-  if (key === "a" || key === "A") {
-    lander.abducting = false;
-  }
-  if (keyCode === LEFT_ARROW) ROTATE_LEFT = false;
-  if (keyCode === RIGHT_ARROW) ROTATE_RIGHT = false;
+  return closest;
 }
 
 function mousePressed(event) {
@@ -1195,10 +1444,17 @@ function mousePressed(event) {
 
   if (gameState === GAME_STATES.WAITING) {
     startGame();
-  } else if (gameState === GAME_STATES.CRASHED || gameState === GAME_STATES.GAMEOVER) {
+    return;
+  }
+  if (gameState === GAME_STATES.CRASHED || gameState === GAME_STATES.GAMEOVER) {
     resetGame();
     startGame();
-  } else if (gameState === GAME_STATES.LANDED) {
-    liftOff();
+    return;
   }
+  if (gameState === GAME_STATES.LANDED) {
+    liftOff();
+    return;
+  }
+  // PLAYING — click fires the laser at the cursor target.
+  fireLaser(mouseX, mouseY);
 }

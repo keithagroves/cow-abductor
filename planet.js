@@ -42,6 +42,20 @@ class Planet {
     this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
   }
 
+  // Per-frame velocity at timeScale=1 (i.e. how far the planet moves in one
+  // simulation step). Use this to inherit orbital motion when landing/spawning
+  // so the ship rides with the planet instead of getting swept past it.
+  getOrbitalVelocity() {
+    if (this.isSun) return createVector(0, 0);
+    let scale = (typeof DEBUG !== "undefined" && DEBUG.orbitSpeedScale !== undefined) ? DEBUG.orbitSpeedScale : 1;
+    let effectiveSpeed = this.orbitSpeed * scale;
+    let nextAngle = this.orbitAngle + effectiveSpeed;
+    let rNext = this.orbitRadius * (1 - this.orbitEccentricity * cos(nextAngle));
+    let nextX = this.orbitCenter.x + rNext * cos(nextAngle);
+    let nextY = this.orbitCenter.y + rNext * sin(nextAngle);
+    return createVector(nextX - this.center.x, nextY - this.center.y);
+  }
+
   update(timeScale = 1) {
     if (this.isSun) {
       this.alien.update(timeScale);
@@ -49,8 +63,9 @@ class Planet {
       return;
     }
 
-    // Update orbit angle
-    this.orbitAngle += this.orbitSpeed * timeScale;
+    // Update orbit angle (scaled live by the debug slider).
+    let scale = (typeof DEBUG !== "undefined" && DEBUG.orbitSpeedScale !== undefined) ? DEBUG.orbitSpeedScale : 1;
+    this.orbitAngle += this.orbitSpeed * scale * timeScale;
     this.alien.update(timeScale);
     
     this.updateOrbitPosition();
@@ -154,6 +169,21 @@ class Planet {
 
     // pop();
 
+    // Sun corona — soft warm halo around the star.
+    if (this.isSun) {
+      noStroke();
+      let coronaLayers = 10;
+      let coronaOuter = this.baseRadius * 2.0;
+      let coronaInner = this.baseRadius * 0.95;
+      for (let i = 0; i < coronaLayers; i++) {
+        let linear = i / (coronaLayers - 1);
+        let t = pow(linear, 2.5);
+        let r = coronaOuter - (coronaOuter - coronaInner) * t;
+        fill(255, 220, 100, 14);
+        circle(this.center.x, this.center.y, r * 2);
+      }
+    }
+
     // Atmosphere is drawn BEFORE the planet body so the innermost (opaque)
     // sky-blue disk gets covered by the terrain on the planet's interior,
     // leaving only the sky annulus visible around the surface.
@@ -163,12 +193,16 @@ class Planet {
       let inner = this.baseRadius;
       let layers = max(1, floor(DEBUG.atmosphereLayers));
       let curve = DEBUG.atmosphereCurve;
+      // Lift the opaque sky band above the noise peaks so it's actually visible.
+      // Width is tunable via DEBUG.atmosphereInnerBand.
+      let bandThickness = max(80, this.baseRadius * 0.05) * DEBUG.atmosphereInnerBand;
+      let opaqueInner = this.baseRadius + this.noiseIntensity + bandThickness;
       for (let i = 0; i < layers; i++) {
         let linear = layers === 1 ? 1 : i / (layers - 1);
         let t = pow(linear, curve);
         let r = outer - (outer - inner) * t;
         if (i === layers - 1) {
-          // Innermost band: fully opaque sky blue — reads as normal sky next to terrain.
+          r = opaqueInner;
           fill(120, 180, 230);
         } else {
           fill(140, 200, 255, 14);
@@ -225,6 +259,7 @@ class Planet {
     }
     strokeWeight(1);
     this.alien.draw();
+    // Day/night shading deferred until we have proper shader-based lighting.
   }
 
   hasAtmosphere() {

@@ -1,4 +1,5 @@
 const BASE_DELIVERY_RANGE = 240;
+const DELIVERY_GOAL = 10;
 
 const UPGRADES = [
   {
@@ -48,14 +49,29 @@ function resetShop() {
   shopButtons = [];
 }
 
-// Pick a stable landable angle on a planet (used by both Base placement and
-// the lander's initial spawn so they end up at the same spot).
-function pickBaseAngle(planet) {
+// Pick a stable landable point on a planet, preferring one near the "top"
+// (screen-up, angle 270°) so the player starts right-side-up.
+function pickBasePoint(planet) {
+  if (!planet.landscape || planet.landscape.length === 0) return null;
   let landable = planet.landscape.filter((p) => p.landable);
-  let point = landable.length > 0
-    ? landable[floor(landable.length / 2)]
-    : planet.landscape[0];
-  return point.angle;
+  if (landable.length === 0) return planet.landscape[0];
+  const TARGET_ANGLE = 270;
+  let best = landable[0];
+  let bestDiff = Infinity;
+  for (let p of landable) {
+    let raw = abs(p.angle - TARGET_ANGLE) % 360;
+    let diff = min(raw, 360 - raw);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = p;
+    }
+  }
+  return best;
+}
+
+function pickBaseAngle(planet) {
+  let p = pickBasePoint(planet);
+  return p ? p.angle : 0;
 }
 
 class Base {
@@ -219,6 +235,9 @@ function tryBuyUpgrade(mx, my) {
     research -= cost;
     btn.upgrade.apply(lander);
     upgradePurchases[btn.upgrade.id] = (upgradePurchases[btn.upgrade.id] || 0) + 1;
+    if (typeof showEvent === "function") {
+      showEvent(`Upgrade installed: ${btn.upgrade.label}`);
+    }
     return true;
   }
   return false;

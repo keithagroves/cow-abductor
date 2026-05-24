@@ -80,5 +80,8 @@ class Cow {
     this.state = "stowed";
     cargo += 1;
     score += 50;
+    if (typeof showEvent === "function") {
+      showEvent(`Specimen stowed (${cargo} / ${lander.maxCargo})`);
+    }
   }
 }

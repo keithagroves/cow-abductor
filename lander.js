@@ -36,6 +36,7 @@ class Lander {
     this.trajectoryOffsets = [];
     this.trajectoryLastFrame = -Infinity;
     this.trajectoryLastInputKey = "";
+    this.beamDust = [];
     this.image = shipImage;
     this.imagethrust = shipFlameImage;
     this.imagethrust2 = shipFlameImage2;
@@ -46,7 +47,7 @@ class Lander {
   reset() {
     this.vel = createVector(0, 0);
     this.pos = createVector(0, 0);
-    
+
     this.rotation = this.targetRotation = -90;
     this.scale = 0.8;
     this.active = true;
@@ -56,6 +57,7 @@ class Lander {
     this.trajectoryOffsets = [];
     this.trajectoryLastFrame = -Infinity;
     this.trajectoryLastInputKey = "";
+    this.beamDust = [];
   }
 
   
@@ -94,16 +96,19 @@ class Lander {
   }
 
   spawnOnPlanet(planet) {
-    let landable = planet.landscape.filter((p) => p.landable);
-    let point = landable.length > 0
-      ? landable[floor(landable.length / 2)]
+    // Use the same point as the base so we spawn right next to it.
+    let point = (typeof pickBasePoint === "function")
+      ? pickBasePoint(planet)
       : planet.landscape[0];
     let r = point.r + this.radius + 4;
     this.pos.set(
       planet.center.x + r * cos(point.angle),
       planet.center.y + r * sin(point.angle)
     );
-    this.vel.set(0, 0);
+    // Inherit the planet's orbital velocity so the ship rides along with the
+    // planet instead of the planet drifting out from under it.
+    let orb = planet.getOrbitalVelocity ? planet.getOrbitalVelocity() : { x: 0, y: 0 };
+    this.vel.set(orb.x, orb.y);
     // Thrust direction in world space is (sin(rot), -cos(rot)) — the ship's "top".
     // We want that to point radially outward from the planet, which is
     // (cos(angle), sin(angle)). Solving gives rotation = angle + 90.
@@ -231,6 +236,10 @@ class Lander {
     let simVX = this.vel.x;
     let simVY = this.vel.y;
 
+    // Trajectory is "coast path" — assumes no thrust and no drag, just gravity.
+    // This shows the player where they'd end up if they let go of all controls
+    // in vacuum, which is the most useful trajectory readout.
+
     // Don't bail out on the planet we're currently inside the bounding radius of
     // (e.g. when sitting on a surface) — only bail after we've left it.
     let outsideAll = true;
@@ -248,11 +257,6 @@ class Lander {
         this.applyGravityToVelocity(velTmp, posTmp, timeScale);
         simVX = velTmp.x;
         simVY = velTmp.y;
-        // Atmospheric drag along the path.
-        let dragTmp = { x: simVX, y: simVY };
-        this.applyAtmosphericDrag(dragTmp, posTmp, timeScale);
-        simVX = dragTmp.x;
-        simVY = dragTmp.y;
         let speedSq = simVX * simVX + simVY * simVY;
         let topSq = this.topSpeed * this.topSpeed;
         if (speedSq > topSq) {
@@ -410,15 +414,12 @@ class Lander {
     if (!this.nearestPlanet) return;
     let planet = this.nearestPlanet;
 
-    // Beam shoots radially from the ship toward the planet center, stopping at the terrain.
-    let toPlanetX = planet.center.x - this.pos.x;
-    let toPlanetY = planet.center.y - this.pos.y;
-    let distToCenter = sqrt(toPlanetX * toPlanetX + toPlanetY * toPlanetY);
-    if (distToCenter === 0) return;
-    let nx = toPlanetX / distToCenter;
-    let ny = toPlanetY / distToCenter;
+    // Beam fires straight down the ship's local axis (opposite of thrust),
+    // so the player must orient the ship above whatever they want to collect.
+    let nx = -sin(this.rotation);
+    let ny = cos(this.rotation);
 
-    let beamLen = getBeamStopPositionRadial(planet, this.beamRange);
+    let beamLen = rayHitsTerrain(this.pos, nx, ny, this.beamRange, planet);
     let endX = this.pos.x + nx * beamLen;
     let endY = this.pos.y + ny * beamLen;
 
@@ -431,14 +432,92 @@ class Lander {
     let rightX = endX - px * halfWidth;
     let rightY = endY - py * halfWidth;
 
+    let t = frameCount * 0.08;
+
+    push();
+    blendMode(ADD);
     noStroke();
-    fill(255, 255, 255, 100);
+
+    // Outer halo cones — stacked, soft, wider than the beam.
+    for (let i = 3; i >= 1; i--) {
+      let widen = 1 + i * 0.35;
+      fill(110, 230, 200, 22);
+      let lwX = endX + px * halfWidth * widen;
+      let lwY = endY + py * halfWidth * widen;
+      let rwX = endX - px * halfWidth * widen;
+      let rwY = endY - py * halfWidth * widen;
+      triangle(this.pos.x, this.pos.y, lwX, lwY, rwX, rwY);
+    }
+
+    // Core cone.
+    fill(180, 255, 220, 90);
     triangle(this.pos.x, this.pos.y, leftX, leftY, rightX, rightY);
-    fill(255, 255, 255, 150);
+
+    // Pulsing inner core.
+    let corePulse = 0.6 + 0.4 * sin(t * 60);
+    fill(230, 255, 245, 140 * corePulse);
+    let innerHalf = halfWidth * 0.35;
+    triangle(
+      this.pos.x,
+      this.pos.y,
+      endX + px * innerHalf,
+      endY + py * innerHalf,
+      endX - px * innerHalf,
+      endY - py * innerHalf
+    );
+
+    // Scrolling suction stripes — travel from terrain end toward the ship.
+    let stripeCount = 8;
+    let scroll = (t * 0.25) % 1;
+    strokeWeight(2);
+    for (let i = 0; i < stripeCount; i++) {
+      let phase = (i / stripeCount + scroll) % 1; // 0 at ship, 1 at end
+      let cx = lerp(this.pos.x, endX, phase);
+      let cy = lerp(this.pos.y, endY, phase);
+      let w = halfWidth * phase;
+      let a = 200 * sin(phase * 180);
+      stroke(150, 255, 220, a);
+      line(cx + px * w, cy + py * w, cx - px * w, cy - py * w);
+    }
+    noStroke();
+
+    // Terrain-end splat — stacked oblong glows.
     push();
     translate(endX, endY);
     rotate(atan2(py, px));
-    ellipse(0, 0, halfWidth * 2, 10);
+    let splatBreath = 0.9 + 0.1 * sin(t * 40);
+    for (let i = 4; i >= 1; i--) {
+      fill(180, 255, 220, 50);
+      let rx = halfWidth * (0.6 + i * 0.4) * splatBreath;
+      ellipse(0, 0, rx * 2, rx * 0.4);
+    }
+    pop();
+
+    // Dust particles getting funneled up the beam.
+    for (let i = 0; i < 3; i++) {
+      let s = random(-halfWidth * 0.9, halfWidth * 0.9);
+      this.beamDust.push({
+        x: endX + px * s,
+        y: endY + py * s,
+        t: 0,
+        speed: random(0.02, 0.045),
+        off: random(-halfWidth * 0.3, halfWidth * 0.3)
+      });
+    }
+    for (let i = this.beamDust.length - 1; i >= 0; i--) {
+      let d = this.beamDust[i];
+      d.t += d.speed;
+      if (d.t >= 1) { this.beamDust.splice(i, 1); continue; }
+      let remaining = 1 - d.t;
+      let cx = lerp(endX, this.pos.x, d.t);
+      let cy = lerp(endY, this.pos.y, d.t);
+      let lateral = d.off * remaining;
+      let dx2 = cx + px * lateral;
+      let dy2 = cy + py * lateral;
+      fill(220, 255, 235, 220 * remaining);
+      circle(dx2, dy2, 2 + 3 * remaining);
+    }
+
     pop();
 
     let A = createVector(this.pos.x, this.pos.y);
@@ -453,6 +532,17 @@ class Lander {
         cow.abduct();
       } else {
         cow.drop();
+      }
+    }
+
+    for (let plant of flora) {
+      if (plant.state === "growing" || plant.state === "stowed") continue;
+      let plantPos = createVector(plant.pos.x, plant.pos.y);
+      let close = dist(this.pos.x, this.pos.y, plant.pos.x, plant.pos.y) < 50;
+      if (pointInTriangle(plantPos, A, B, C) || close) {
+        plant.abduct();
+      } else {
+        plant.drop();
       }
     }
   }

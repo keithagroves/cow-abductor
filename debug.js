@@ -1,22 +1,24 @@
 const DEBUG = {
-  thrust: 0.1,
-  maxFuel: 1000,
-  beamRange: 200,
+  thrust: 0.15,
+  maxFuel: 250,
+  beamRange: 300,
   beamWidth: 20,
-  liftoffKick: 6,
-  planetRadiusScale: 2.5,
-  planetGravity: 500000,
-  planetSpacing: 6500,
+  planetRadiusScale: 4.0,
+  planetGravity: 1200000,
+  planetSpacing: 14000,
+  orbitSpeedScale: 1.0, // 0 freezes orbits, 1 = baseline random speeds
   pullStrength: 0.15,
   cameraMinZoom: 0.7,
   cameraMaxZoom: 2.0,
   cameraZoomDistance: 600,
+  zoomOverride: 0, // 0 = use dynamic distance-based zoom; >0 forces this scale
   showTrajectory: true,
   minimapTrajectorySteps: 320,
-  atmosphereScale: 1.6,   // atmosphere top = baseRadius * (1 + atmosphereScale)
-  atmosphereDrag: 0.04,   // drag coefficient at full density (0..1 per frame at scale=1)
+  atmosphereScale: 0.6,   // atmosphere top = baseRadius * (1 + atmosphereScale)
+  atmosphereDrag: 0.015,  // drag coefficient at full density (0..1 per frame at scale=1)
   atmosphereLayers: 6,    // visual gradient steps
-  atmosphereCurve: 3.0,   // >1 clusters layers toward outer edge (inner band wider)
+  atmosphereCurve: 3.0,   // >1 clusters gradient layers toward outer edge
+  atmosphereInnerBand: 1.0, // multiplier on the opaque inner band thickness
   burnSpeedThreshold: 5,  // speed/frame below this, no burn
   burnIntensity: 0.6,     // particle emission scale
   shown: false
@@ -25,7 +27,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 2;
+const DEBUG_VERSION = 6;
 
 function loadDebugFromStorage() {
   try {
@@ -59,19 +61,21 @@ const DEBUG_PARAMS = [
   { key: "maxFuel",           label: "Max Fuel",          min: 200,  max: 5000, step: 50,    live: true,  apply: (v) => { lander.maxFuel = v; if (lander.fuel > v) lander.fuel = v; } },
   { key: "beamRange",         label: "Beam Range",        min: 50,   max: 800,  step: 10,    live: true,  apply: (v) => { lander.beamRange = v; } },
   { key: "beamWidth",         label: "Beam Width",        min: 5,    max: 200,  step: 1,     live: true,  apply: (v) => { lander.beamWidth = v; } },
-  { key: "liftoffKick",       label: "Lift-off Kick",     min: 0,    max: 30,   step: 1,     live: true },
   { key: "pullStrength",      label: "Cow Pull",          min: 0.02, max: 0.5,  step: 0.01,  live: true,  apply: (v) => { for (let c of cows) c.pullStrength = v; } },
-  { key: "planetGravity",     label: "Planet Gravity",    min: 10000, max: 600000, step: 5000, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.gravity = v; } },
-  { key: "planetRadiusScale", label: "Planet Size ×",     min: 0.5,  max: 4.0,  step: 0.1,   live: false },
-  { key: "planetSpacing",     label: "Planet Spacing",    min: 1500, max: 12000, step: 100,  live: false },
+  { key: "planetGravity",     label: "Planet Gravity",    min: 10000, max: 4000000, step: 20000, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.gravity = v; } },
+  { key: "planetRadiusScale", label: "Planet Size ×",     min: 0.5,  max: 10.0, step: 0.1,   live: false },
+  { key: "planetSpacing",     label: "Planet Spacing",    min: 1500, max: 40000, step: 200,  live: false },
+  { key: "orbitSpeedScale",   label: "Orbit Speed ×",     min: 0,    max: 2,    step: 0.05,  live: true },
   { key: "cameraMinZoom",     label: "Cam Min Zoom",      min: 0.1,  max: 2.0,  step: 0.05,  live: true },
   { key: "cameraMaxZoom",     label: "Cam Max Zoom",      min: 0.2,  max: 4.0,  step: 0.05,  live: true },
   { key: "cameraZoomDistance",label: "Cam Zoom Range",    min: 100,  max: 4000, step: 50,    live: true },
+  { key: "zoomOverride",      label: "Zoom Out (0 = off)", min: 0,   max: 1,    step: 0.002, live: true },
   { key: "minimapTrajectorySteps", label: "Map Traj Steps", min: 40, max: 1200, step: 20,    live: true },
   { key: "atmosphereScale",   label: "Atmo Thickness",    min: 0.1,  max: 3.0,  step: 0.05,  live: true },
   { key: "atmosphereDrag",    label: "Atmo Drag",         min: 0,    max: 0.2,  step: 0.005, live: true },
   { key: "atmosphereLayers",  label: "Atmo Gradient Steps", min: 1, max: 20,    step: 1,     live: true },
-  { key: "atmosphereCurve",   label: "Atmo Inner Width",  min: 1,    max: 8,    step: 0.1,   live: true },
+  { key: "atmosphereCurve",   label: "Atmo Layer Curve",  min: 1,    max: 8,    step: 0.1,   live: true },
+  { key: "atmosphereInnerBand", label: "Atmo Inner Band", min: 0.1,  max: 8,    step: 0.1,   live: true },
   { key: "burnSpeedThreshold",label: "Burn Speed Min",    min: 0,    max: 30,   step: 0.5,   live: true },
   { key: "burnIntensity",     label: "Burn Intensity",    min: 0,    max: 3.0,  step: 0.05,  live: true },
   { key: "showTrajectory",    label: "Show Trajectory (T)", type: "toggle",                   live: true }
