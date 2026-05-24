@@ -2,7 +2,6 @@ class Planet {
   constructor(center, baseRadius, noiseIntensity, numPoints, density, orbitRadius,sun) {
   
     this.orbitCenter = sun;
-    console.log(this.orbitCenter);
     this.isSun = false;
     this.center = center;
     this.baseRadius = baseRadius;
@@ -12,32 +11,49 @@ class Planet {
     this.fillColor = color(numPoints, noiseIntensity, baseRadius/density , density/10 );;
     this.gravity = density;
    // Add orbital parameters
-    if(this.center.x != sun.x && this.center.y != sun.y){
+    if(this.center.x !== sun.x || this.center.y !== sun.y){
     this.orbitRadius = orbitRadius  // Distance from orbit center
     this.orbitSpeed = random(0.001, 0.002);   // Angular velocity
     this.orbitAngle = random(360)    // Starting angle
     this.orbitEccentricity =0 // 0 = circle, higher = more elliptical
     } else {
       this.isSun = true;
+      this.orbitRadius = 0;
+      this.orbitSpeed = 0;
+      this.orbitAngle = 0;
+      this.orbitEccentricity = 0;
     }
 
+    this.updateOrbitPosition();
     this.landscape = this.generateLandscape();
     this.snakeShapes = this.generateSnakeShapes();
     this.alien = new Alien(this.center, baseRadius, this.strokeColor);
     
 
   }
+
+  updateOrbitPosition() {
+    if (this.isSun) {
+      return;
+    }
+
+    let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(this.orbitAngle));
+    this.center.x = this.orbitCenter.x + r * cos(this.orbitAngle);
+    this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
+  }
+
   update(timeScale = 1) {
+    if (this.isSun) {
+      this.alien.update(timeScale);
+      this.updateLandscapePoints();
+      return;
+    }
+
     // Update orbit angle
     this.orbitAngle += this.orbitSpeed * timeScale;
     this.alien.update(timeScale);
     
-    // Calculate new position using elliptical orbit
-    let r = this.orbitRadius * (1 - this.orbitEccentricity * cos(this.orbitAngle));
-    if(!this.isSun){ 
-    this.center.x = this.orbitCenter.x + r * cos(this.orbitAngle);
-    this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
-    }
+    this.updateOrbitPosition();
     // Update landscape points relative to new center
     this.updateLandscapePoints();
   }
@@ -138,6 +154,29 @@ class Planet {
 
     // pop();
 
+    // Atmosphere is drawn BEFORE the planet body so the innermost (opaque)
+    // sky-blue disk gets covered by the terrain on the planet's interior,
+    // leaving only the sky annulus visible around the surface.
+    if (this.hasAtmosphere()) {
+      noStroke();
+      let outer = this.atmosphereOuterRadius();
+      let inner = this.baseRadius;
+      let layers = max(1, floor(DEBUG.atmosphereLayers));
+      let curve = DEBUG.atmosphereCurve;
+      for (let i = 0; i < layers; i++) {
+        let linear = layers === 1 ? 1 : i / (layers - 1);
+        let t = pow(linear, curve);
+        let r = outer - (outer - inner) * t;
+        if (i === layers - 1) {
+          // Innermost band: fully opaque sky blue — reads as normal sky next to terrain.
+          fill(120, 180, 230);
+        } else {
+          fill(140, 200, 255, 14);
+        }
+        circle(this.center.x, this.center.y, r * 2);
+      }
+    }
+
     // Draw planet
     stroke(this.strokeColor);
     fill(this.fillColor);
@@ -186,12 +225,26 @@ class Planet {
     }
     strokeWeight(1);
     this.alien.draw();
-    // fill sky blue
-    noStroke();
-    fill(0, 150, 255, 50); 
-    let largeEnoughToHaveAnAtmosphere = this.baseRadius > 1000;
-    if(largeEnoughToHaveAnAtmosphere)
-    circle(this.center.x, this.center.y, this.baseRadius * 2.2);
+  }
+
+  hasAtmosphere() {
+    return !this.isSun;
+  }
+
+  atmosphereOuterRadius() {
+    return this.baseRadius * (1 + DEBUG.atmosphereScale);
+  }
+
+  // Returns 0..1 density at the given world point. 1 at the surface, 0 at the top.
+  atmosphericDensity(x, y) {
+    if (!this.hasAtmosphere()) return 0;
+    let dx = x - this.center.x;
+    let dy = y - this.center.y;
+    let dist = sqrt(dx * dx + dy * dy);
+    let altitude = dist - this.baseRadius;
+    let thickness = this.baseRadius * DEBUG.atmosphereScale;
+    if (altitude >= thickness) return 0;
+    if (altitude <= 0) return 1;
+    return 1 - altitude / thickness;
   }
 }
-

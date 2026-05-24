@@ -10,8 +10,7 @@ class Alien {
         let x = this.center.x + cos(this.angle) * this.orbitRadius;
         let y = this.center.y + sin(this.angle) * this.orbitRadius;
         this.pos = createVector(x, y);
-        this.image = loadImage('unnamed.png');
-        this.image = loadImage('unnamed.png');
+        this.image = alienGroundImage;
     }
 
     update(timeScale = 1) {
@@ -26,7 +25,6 @@ class Alien {
     }
 
     draw() {
-        this.update();
         // Calculate arm and leg angles using sine wave
         let armAngle = sin(frameCount) * 45;
         let legAngle = cos(frameCount) * 20; // Offset by PI to alternate with arms

@@ -1,3 +1,8 @@
+const TRAJECTORY_POINT_COUNT = 120;
+const TRAJECTORY_REFRESH_FRAMES = 4;
+const TRAJECTORY_MIN_DISTANCE_SQ = 1;
+const TRAJECTORY_DRAW_STRIDE = 3;
+
 class Lander {
   constructor() {
     this.pos = createVector();
@@ -18,13 +23,23 @@ class Lander {
     this.radius =20;
     // Physics constants
     this.gravity = 0.0;
-    this.thrust = 0.01;
+    this.thrust = DEBUG.thrust;
     this.drag = 0.999;
     this.topSpeed = 1000;
-    this.image = loadImage("./ship.png");
-    this.imagethrust = loadImage("./shipflame.png");
-    this.imagethrust2 = loadImage("./flame2.png");
-    
+    // Upgradeable stats (initial values come from the debug panel so live
+    // tuning is reflected on the next reset).
+    this.maxFuel = DEBUG.maxFuel;
+    this.maxCargo = 3;
+    this.beamRange = DEBUG.beamRange;
+    this.beamWidth = DEBUG.beamWidth;
+    this.trajectoryPoints = [];
+    this.trajectoryOffsets = [];
+    this.trajectoryLastFrame = -Infinity;
+    this.trajectoryLastInputKey = "";
+    this.image = shipImage;
+    this.imagethrust = shipFlameImage;
+    this.imagethrust2 = shipFlameImage2;
+
     this.reset();
   }
 
@@ -36,7 +51,11 @@ class Lander {
     this.scale = 0.8;
     this.active = true;
     this.thrusting = 0;
-    this.fuel = 1000;
+    this.fuel = this.maxFuel;
+    this.trajectoryPoints = [];
+    this.trajectoryOffsets = [];
+    this.trajectoryLastFrame = -Infinity;
+    this.trajectoryLastInputKey = "";
   }
 
   
@@ -70,85 +89,243 @@ class Lander {
 
   setNearestPlanet(planet){
     if(planet != this.nearestPlanet){
+      this.nearestPlanet = planet;
+    }
+  }
+
+  spawnOnPlanet(planet) {
+    let landable = planet.landscape.filter((p) => p.landable);
+    let point = landable.length > 0
+      ? landable[floor(landable.length / 2)]
+      : planet.landscape[0];
+    let r = point.r + this.radius + 4;
+    this.pos.set(
+      planet.center.x + r * cos(point.angle),
+      planet.center.y + r * sin(point.angle)
+    );
+    this.vel.set(0, 0);
+    // Thrust direction in world space is (sin(rot), -cos(rot)) — the ship's "top".
+    // We want that to point radially outward from the planet, which is
+    // (cos(angle), sin(angle)). Solving gives rotation = angle + 90.
+    this.rotation = this.targetRotation = point.angle + 90;
     this.nearestPlanet = planet;
-    
-    print("setting nearest planet")
+    this.active = true;
+  }
+
+  applyGravityToVelocity(velocity, position, timeScale = 1) {
+    let gravityX = 0;
+    let gravityY = 0;
+
+    for (let planet of planets) {
+      let dx = planet.center.x - position.x;
+      let dy = planet.center.y - position.y;
+      let distSq = max(TRAJECTORY_MIN_DISTANCE_SQ, dx * dx + dy * dy);
+      let distance = sqrt(distSq);
+      let force = planet.gravity / distSq;
+
+      gravityX += (dx / distance) * force * timeScale;
+      gravityY += (dy / distance) * force * timeScale;
+    }
+
+    velocity.x += gravityX;
+    velocity.y += gravityY;
+  }
+
+  applyThrustToVelocity(velocity, timeScale = 1) {
+    if (this.thrusting <= 0 || this.fuel <= 0) {
+      return;
+    }
+
+    let thrustForce = this.thrust * this.thrusting * timeScale;
+    velocity.x += sin(this.rotation) * thrustForce;
+    velocity.y -= cos(this.rotation) * thrustForce;
+  }
+
+  applyAtmosphericDrag(velocity, position, timeScale = 1) {
+    if (DEBUG.atmosphereDrag <= 0 || DEBUG.atmosphereScale <= 0) return;
+    let totalDensity = 0;
+    for (let planet of planets) {
+      totalDensity += planet.atmosphericDensity(position.x, position.y);
+    }
+    if (totalDensity <= 0) return;
+    if (totalDensity > 1) totalDensity = 1;
+    let factor = 1 - DEBUG.atmosphereDrag * totalDensity * timeScale;
+    if (factor < 0) factor = 0;
+    velocity.x *= factor;
+    velocity.y *= factor;
+  }
+
+  limitVelocity(velocity) {
+    let speedSq = velocity.x * velocity.x + velocity.y * velocity.y;
+    let topSpeedSq = this.topSpeed * this.topSpeed;
+
+    if (speedSq > topSpeedSq) {
+      let speed = sqrt(speedSq);
+      velocity.x *= this.topSpeed / speed;
+      velocity.y *= this.topSpeed / speed;
     }
   }
 
-  predictTrajectory() {
-    let points = [];
-    let simPos = this.pos.copy();
-    let simVel = this.vel.copy();
-    
-    // Simulate next 100 steps
-    for(let i = 0; i < 100; i++) {
-      // Calculate gravity at this point
-      let gravityVector = createVector(0, 0);
-      
-      for (let planet of planets) {
-        let dx = planet.center.x - simPos.x;
-        let dy = planet.center.y - simPos.y;
-        let distSq = dx * dx + dy * dy;
-        let smoothing = 1000;
-        let adjustedDist = Math.pow(distSq, 0.85) + smoothing;
-        let force = planet.gravity / adjustedDist;
-        
-        gravityVector.add(createVector(dx, dy).normalize().mult(force));
+  predictTrajectory(timeScale = 1) {
+    let inputKey = [
+      round(this.vel.x),
+      round(this.vel.y),
+      round(timeScale * 10)
+    ].join(":");
+
+    let cacheIsFresh =
+      this.trajectoryPoints.length === TRAJECTORY_POINT_COUNT &&
+      frameCount - this.trajectoryLastFrame < TRAJECTORY_REFRESH_FRAMES &&
+      inputKey === this.trajectoryLastInputKey;
+
+    if (!cacheIsFresh) {
+      let startX = this.pos.x;
+      let startY = this.pos.y;
+      let simPosition = { x: startX, y: startY };
+      let simVelocity = { x: this.vel.x, y: this.vel.y };
+
+      for (let i = 0; i < TRAJECTORY_POINT_COUNT; i++) {
+        this.applyGravityToVelocity(simVelocity, simPosition, timeScale);
+        this.limitVelocity(simVelocity);
+
+        simPosition.x += simVelocity.x * timeScale;
+        simPosition.y += simVelocity.y * timeScale;
+
+        if (!this.trajectoryOffsets[i]) {
+          this.trajectoryOffsets[i] = {
+            x: simPosition.x - startX,
+            y: simPosition.y - startY
+          };
+        } else {
+          this.trajectoryOffsets[i].x = simPosition.x - startX;
+          this.trajectoryOffsets[i].y = simPosition.y - startY;
+        }
       }
-      
-      // Update simulated velocity and position
-      simVel.add(gravityVector);
-      simPos.add(simVel);
-      
-      // Store point
-      points.push(simPos.copy());
-      
 
+      this.trajectoryLastFrame = frameCount;
+      this.trajectoryLastInputKey = inputKey;
     }
-    
-    return points;
+
+    for (let i = 0; i < this.trajectoryOffsets.length; i++) {
+      if (!this.trajectoryPoints[i]) {
+        this.trajectoryPoints[i] = {
+          x: this.pos.x + this.trajectoryOffsets[i].x,
+          y: this.pos.y + this.trajectoryOffsets[i].y
+        };
+      } else {
+        this.trajectoryPoints[i].x = this.pos.x + this.trajectoryOffsets[i].x;
+        this.trajectoryPoints[i].y = this.pos.y + this.trajectoryOffsets[i].y;
+      }
+    }
+
+    return this.trajectoryPoints;
   }
+
+  // Coarser, longer-horizon trajectory for the minimap. No cache because the
+  // minimap is forgiving of small per-frame jitter, and a bigger step (sub-stride)
+  // keeps cost down.
+  predictLongTrajectory(timeScale = 1, steps = 240, subStride = 4) {
+    let pts = [];
+    let simX = this.pos.x;
+    let simY = this.pos.y;
+    let simVX = this.vel.x;
+    let simVY = this.vel.y;
+
+    // Don't bail out on the planet we're currently inside the bounding radius of
+    // (e.g. when sitting on a surface) — only bail after we've left it.
+    let outsideAll = true;
+    for (let p of planets) {
+      let ddx = simX - p.center.x;
+      let ddy = simY - p.center.y;
+      let rSq = p.baseRadius * p.baseRadius;
+      if (ddx * ddx + ddy * ddy < rSq) { outsideAll = false; break; }
+    }
+
+    outer: for (let i = 0; i < steps; i++) {
+      for (let s = 0; s < subStride; s++) {
+        let velTmp = { x: simVX, y: simVY };
+        let posTmp = { x: simX, y: simY };
+        this.applyGravityToVelocity(velTmp, posTmp, timeScale);
+        simVX = velTmp.x;
+        simVY = velTmp.y;
+        // Atmospheric drag along the path.
+        let dragTmp = { x: simVX, y: simVY };
+        this.applyAtmosphericDrag(dragTmp, posTmp, timeScale);
+        simVX = dragTmp.x;
+        simVY = dragTmp.y;
+        let speedSq = simVX * simVX + simVY * simVY;
+        let topSq = this.topSpeed * this.topSpeed;
+        if (speedSq > topSq) {
+          let speed = sqrt(speedSq);
+          simVX *= this.topSpeed / speed;
+          simVY *= this.topSpeed / speed;
+        }
+        simX += simVX * timeScale;
+        simY += simVY * timeScale;
+
+        // Stop the prediction when we hit any planet. We keep simulating
+        // while we're still leaving the planet we spawned inside.
+        let insideAny = false;
+        for (let p of planets) {
+          let ddx = simX - p.center.x;
+          let ddy = simY - p.center.y;
+          let rSq = p.baseRadius * p.baseRadius;
+          if (ddx * ddx + ddy * ddy < rSq) { insideAny = true; break; }
+        }
+        if (outsideAll && insideAny) {
+          // Record the impact point so the line terminates at the planet edge.
+          pts.push({ x: simX, y: simY });
+          break outer;
+        }
+        if (!insideAny) outsideAll = true;
+      }
+      pts.push({ x: simX, y: simY });
+    }
+    return pts;
+  }
+
+  calculateGravityVector(position, timeScale = 1) {
+    let gravityVector = createVector(0, 0);
+
+    for (let planet of planets) {
+      let dx = planet.center.x - position.x;
+      let dy = planet.center.y - position.y;
+      let distSq = max(TRAJECTORY_MIN_DISTANCE_SQ, dx * dx + dy * dy);
+      let distance = sqrt(distSq);
+      let force = planet.gravity / distSq;
+
+      gravityVector.x += (dx / distance) * force * timeScale;
+      gravityVector.y += (dy / distance) * force * timeScale;
+    }
+
+    return gravityVector;
+  }
+
   update(timeScale = 1) {
     if (!this.active) return;
+
+    // If the tank ran dry mid-burn, kill thrust so the flame/sound also stop.
+    if (this.thrusting > 0 && this.fuel <= 0) {
+      this.thrusting = 0;
+    }
 
     // Smooth rotation
     this.rotation += (this.targetRotation - this.rotation) * 0.3 * timeScale;
 
-    // Calculate gravitational forces from all planets
-    let gravityVector = createVector(0, 0);
-    for (let planet of planets) {
-      let dx = planet.center.x - this.pos.x;
-      let dy = planet.center.y - this.pos.y;
-      let distSq = dx * dx + dy * dy;
-      let smoothing = 0;
-      let adjustedDist = distSq + smoothing;
-      let gravitationalStrength = planet.gravity;
-      let force = gravitationalStrength / adjustedDist;
-      
-      gravityVector.add(createVector(dx, dy).normalize().mult(force * timeScale));
-    }
-    
     // Apply gravitational forces
-    this.vel.add(gravityVector);
+    this.vel.add(this.calculateGravityVector(this.pos, timeScale));
 
     // Apply thrust
     if (this.thrusting > 0 && this.fuel > 0) {
-      let thrustVector = createVector(0, -this.thrust * this.thrusting);
-      let angle = this.rotation;
-      let rotatedThrust = createVector(
-        thrustVector.x * cos(angle) - thrustVector.y * sin(angle),
-        thrustVector.x * sin(angle) + thrustVector.y * cos(angle)
-      );
-      this.vel.add(rotatedThrust.mult(timeScale));
+      this.applyThrustToVelocity(this.vel, timeScale);
       this.fuel -= 0.2 * this.thrusting * timeScale;
     }
 
+    // Atmospheric drag (after thrust so engines still propel you through air).
+    this.applyAtmosphericDrag(this.vel, this.pos, timeScale);
+
     // Limit speed
-    let speed = this.vel.mag();
-    if (speed > this.topSpeed) {
-      this.vel.mult(this.topSpeed / speed);
-    }
+    this.limitVelocity(this.vel);
 
     // Update position
     this.pos.add(this.vel.copy().mult(timeScale));
@@ -168,7 +345,7 @@ class Lander {
     this.thrustLevel = this.thrusting;
   }
    flip = false;
-  render() {
+  render(timeScale = 1) {
     push();
     translate(this.pos.x, this.pos.y);
     scale(this.scale);
@@ -207,71 +384,72 @@ class Lander {
     // Thrust animation
 
 
-    // Tractor beam
-    if (this.abducting) {
-      this.abduct();
-    }
     noStroke();
     fill(255, 255, 0, 50);
    // ellipse(0, 5, 100, 100);
 
     pop();
-    if(this.active) {
-      let trajectoryPoints = this.predictTrajectory();
-      push();
-      stroke(255, 100); // Semi-transparent white
-      strokeWeight(1);
-      noFill();
-      beginShape();
-      for(let point of trajectoryPoints) {
-        vertex(point.x, point.y);
-      }
-      endShape();
-      pop();
+    // Tractor beam runs in world space (not the ship's local frame),
+    // so call after the local push/pop. Otherwise scale + rotation distort it.
+    if (this.abducting) {
+      this.abduct();
     }
+    // Trajectory is drawn on the minimap only (see drawMinimap).
+  }
+
+  localToWorld(localX, localY) {
+    let scaledX = localX * this.scale;
+    let scaledY = localY * this.scale;
+    return createVector(
+      this.pos.x + scaledX * cos(this.rotation) - scaledY * sin(this.rotation),
+      this.pos.y + scaledX * sin(this.rotation) + scaledY * cos(this.rotation)
+    );
   }
 
   abduct() {
-    let baseSize = 200; // Maximum tractor beam length
-    let range = 20; // Beam width
+    if (!this.nearestPlanet) return;
+    let planet = this.nearestPlanet;
 
-    // Get where the beam should stop based on terrain
-    let beamStopY = getBeamStopPositionRadial(this.nearestPlanet, baseSize);
-    print("beam stop!!!", beamStopY)
-    // Draw the triangle tractor beam
+    // Beam shoots radially from the ship toward the planet center, stopping at the terrain.
+    let toPlanetX = planet.center.x - this.pos.x;
+    let toPlanetY = planet.center.y - this.pos.y;
+    let distToCenter = sqrt(toPlanetX * toPlanetX + toPlanetY * toPlanetY);
+    if (distToCenter === 0) return;
+    let nx = toPlanetX / distToCenter;
+    let ny = toPlanetY / distToCenter;
+
+    let beamLen = getBeamStopPositionRadial(planet, this.beamRange);
+    let endX = this.pos.x + nx * beamLen;
+    let endY = this.pos.y + ny * beamLen;
+
+    // Perpendicular axis for the beam's wide end.
+    let px = -ny;
+    let py = nx;
+    let halfWidth = this.beamWidth;
+    let leftX = endX + px * halfWidth;
+    let leftY = endY + py * halfWidth;
+    let rightX = endX - px * halfWidth;
+    let rightY = endY - py * halfWidth;
+
     noStroke();
     fill(255, 255, 255, 100);
-    triangle(
-      0,
-      0,
-      range,
-      beamStopY, // Left corner at ground
-      -range,
-      beamStopY // Right corner at ground
-    );
-
+    triangle(this.pos.x, this.pos.y, leftX, leftY, rightX, rightY);
     fill(255, 255, 255, 150);
-    ellipse(0, beamStopY, range * 2, 10); // Highlight beam base
-    let triangleA = createVector(this.pos.x, this.pos.y + 11 * this.scale); // Top point
-    let triangleB = createVector(
-      this.pos.x - range,
-      this.pos.y + beamStopY * this.scale
-    ); // Bottom left
-    let triangleC = createVector(
-      this.pos.x + range,
-      this.pos.y + beamStopY * this.scale
-    ); // Bottom right
-    // Check each cow
-    for (let i = 0; i < cows.length; i++) {
-      let cow = cows[i];
+    push();
+    translate(endX, endY);
+    rotate(atan2(py, px));
+    ellipse(0, 0, halfWidth * 2, 10);
+    pop();
 
+    let A = createVector(this.pos.x, this.pos.y);
+    let B = createVector(leftX, leftY);
+    let C = createVector(rightX, rightY);
+
+    for (let cow of cows) {
+      if (cow.state === "stowed") continue;
       let cowPos = createVector(cow.pos.x, cow.pos.y);
-
-      // Check if the cow is within the triangle
-      if (
-        pointInTriangle(cowPos, triangleA, triangleB, triangleC) ||
-        dist(this.pos.x, this.pos.y, cow.pos.x, cow.pos.y) < 50
-      ) {
+      let close = dist(this.pos.x, this.pos.y, cow.pos.x, cow.pos.y) < 50;
+      if (pointInTriangle(cowPos, A, B, C) || close) {
         cow.abduct();
       } else {
         cow.drop();

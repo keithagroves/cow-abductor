@@ -1,59 +1,68 @@
 class Cow {
-  constructor(x, y, cowImage) {
-    this.pos = createVector(x, y);
-    this.vel = createVector(0, 0); // <-- Add this
+  constructor(planet, surfaceAngle, surfaceRadius, cowImage) {
+    this.planet = planet;
+    this.surfaceAngle = surfaceAngle;
+    this.surfaceRadius = surfaceRadius;
     this.size = 50;
     this.state = "onGround";
     this.image = cowImage;
-    this.offset = createVector();
     this.scale = 0.8;
-    this.pull = 0;
-    this.maxSpeed = 3; // Maximum speed
-    this.pullStrength = 0.05; // How strongly it's pulled toward the lander
-    this.origin = createVector(x, y);
+    this.pullStrength = 0.15;
+    this.pos = createVector(0, 0);
+    this.vel = createVector(0, 0);
+    this.recomputeOrigin();
+    this.pos.set(this.origin.x, this.origin.y);
+  }
+
+  recomputeOrigin() {
+    let r = this.surfaceRadius;
+    let a = this.surfaceAngle;
+    if (!this.origin) this.origin = createVector(0, 0);
+    this.origin.set(
+      this.planet.center.x + r * cos(a),
+      this.planet.center.y + r * sin(a)
+    );
   }
 
   update(timeScale = 1) {
-    if (this.state === "carried") {
-      let dx = lander.pos.x - this.pos.x;
-      let dy = lander.pos.y - this.pos.y;
+    if (this.state === "stowed") return;
 
-      // "Pull" the cow toward the Lander
-      this.vel.x += dx * this.pullStrength * timeScale;
-      this.vel.y += dy * this.pullStrength * timeScale;
+    this.recomputeOrigin();
 
-      // Limit maximum speed
-      let speed = this.vel.mag();
-      if (speed > this.maxSpeed) {
-        this.vel.mult(this.maxSpeed / speed);
-      }
+    let target = this.state === "carried" ? lander.pos : this.origin;
+    let pull = this.state === "carried" ? this.pullStrength : this.pullStrength * 2;
 
-      // Move the cow by its velocity
-      this.pos.add(this.vel.copy().mult(timeScale));
-    } else if (this.state === "onGround") {
-      let dx = this.origin.x - this.pos.x;
-      let dy = this.origin.y - this.pos.y;
+    let dx = target.x - this.pos.x;
+    let dy = target.y - this.pos.y;
+    this.vel.x += dx * pull * timeScale;
+    this.vel.y += dy * pull * timeScale;
+    this.vel.mult(0.85);
 
-      // "Pull" the cow toward the origin
-      this.vel.x += dx * this.pullStrength * 2 * timeScale;
-      this.vel.y += dy * this.pullStrength * 2 * timeScale;
+    this.pos.add(this.vel.copy().mult(timeScale));
 
-      // Limit maximum speed
-      let speed = this.vel.mag();
-      if (speed > this.maxSpeed) {
-        this.vel.mult(this.maxSpeed / speed);
-      }
-
-      // Move the cow by its velocity
-      this.pos.add(this.vel.copy().mult(timeScale));
+    // Stow once the cow reaches the lander, if there's room in the hold.
+    if (
+      this.state === "carried" &&
+      cargo < lander.maxCargo &&
+      dist(this.pos.x, this.pos.y, lander.pos.x, lander.pos.y) < 25
+    ) {
+      this.stow();
     }
   }
 
   render() {
+    if (this.state === "stowed") return;
+    // Stand cow upright relative to its planet so the sprite isn't drawn into the terrain.
+    let dx = this.pos.x - this.planet.center.x;
+    let dy = this.pos.y - this.planet.center.y;
+    let standAngle = atan2(dy, dx) + 90;
     push();
+    imageMode(CENTER);
     translate(this.pos.x, this.pos.y);
+    rotate(standAngle);
     scale(this.scale);
     image(this.image, 0, 0, this.size, this.size);
+    imageMode(CORNER);
     pop();
   }
 
@@ -64,6 +73,12 @@ class Cow {
   }
 
   drop() {
-    this.state = "onGround";
+    if (this.state === "carried") this.state = "onGround";
+  }
+
+  stow() {
+    this.state = "stowed";
+    cargo += 1;
+    score += 50;
   }
 }
