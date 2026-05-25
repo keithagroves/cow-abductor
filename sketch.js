@@ -131,6 +131,7 @@ function setup() {
   buildWorld();
   resetGame();
   setupDebugPanel();
+  initAtmosphere();
 }
 
 function buildWorld() {
@@ -341,6 +342,9 @@ function draw() {
   updateAndDrawLasers(timeScale);
 
   pop();
+
+  drawAtmosphere();
+
   pollInput(timeScale);
   if (gameState !== GAME_STATES.WAITING) {
     drawHUD();

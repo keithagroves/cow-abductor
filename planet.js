@@ -184,31 +184,25 @@ class Planet {
       }
     }
 
-    // Atmosphere is drawn BEFORE the planet body so the innermost (opaque)
-    // sky-blue disk gets covered by the terrain on the planet's interior,
-    // leaving only the sky annulus visible around the surface.
+    // Atmosphere as a single radial gradient: opaque sky-blue just above the
+    // terrain (covered by the planet body on the inside), fading to fully
+    // transparent at the outer edge. Drawn before the planet body so the
+    // opaque inner disk only shows as a ring around the surface.
     if (this.hasAtmosphere()) {
-      noStroke();
       let outer = this.atmosphereOuterRadius();
-      let inner = this.baseRadius;
-      let layers = max(1, floor(DEBUG.atmosphereLayers));
-      let curve = DEBUG.atmosphereCurve;
-      // Lift the opaque sky band above the noise peaks so it's actually visible.
-      // Width is tunable via DEBUG.atmosphereInnerBand.
       let bandThickness = max(80, this.baseRadius * 0.05) * DEBUG.atmosphereInnerBand;
       let opaqueInner = this.baseRadius + this.noiseIntensity + bandThickness;
-      for (let i = 0; i < layers; i++) {
-        let linear = layers === 1 ? 1 : i / (layers - 1);
-        let t = pow(linear, curve);
-        let r = outer - (outer - inner) * t;
-        if (i === layers - 1) {
-          r = opaqueInner;
-          fill(120, 180, 230);
-        } else {
-          fill(140, 200, 255, 14);
-        }
-        circle(this.center.x, this.center.y, r * 2);
-      }
+      let cx = this.center.x;
+      let cy = this.center.y;
+
+      let ctx = drawingContext;
+      let grad = ctx.createRadialGradient(cx, cy, opaqueInner, cx, cy, outer);
+      grad.addColorStop(0, "rgba(120, 180, 230, 1)");
+      grad.addColorStop(1, "rgba(140, 200, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Draw planet
