@@ -16,7 +16,7 @@ let research = 0;
 let burnParticles = [];
 let stars = [];
 let cowImage;
-let view = { x: 0, y: 0, scale: 1, focusX: 0, focusY: 0 };
+let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0 };
 let startTime;
 let lastDiagnosticLog = 0;
 let eventMessage = "";
@@ -29,7 +29,8 @@ let shipFlameImage2;
 let alienGroundImage;
 let rocketSound;
 let thrustPlaying = false;
-const KEY_A = 65, KEY_D = 68, KEY_W = 87, KEY_S = 83;
+const KEY_A = 65, KEY_D = 68, KEY_W = 87, KEY_S = 83, KEY_Q = 81, KEY_E = 69;
+const CAMERA_ROTATE_SPEED = 1.5; // degrees per frame while Q/E is held
 let timeScale = 1;
 let timeSlider;
 
@@ -141,25 +142,47 @@ function buildWorld() {
   let spacing = DEBUG.planetSpacing;
 
   let sun = createVector(10000, -100);
-  let starting = spacing * 4;
+  // Starter sits way out from the sun so there's plenty of empty space to fly
+  // around the home system before bumping into anything else.
+  let starting = spacing * 16;
 
   // Inner planets (radii scale with the debug multiplier).
-  planets.push(new Planet(createVector(0, 0),  800 * scale, 255, 255, density, starting, sun));
+  // Building the universe one planet at a time — uncomment the next worlds
+  // once the starter feels right.
+  planets.push(new Planet(createVector(0, 0),  8000 * scale, 255, 255, density, starting, sun));
+  // Pin the starter while we tune it — orbital motion under the ship causes
+  // weird relative-physics artifacts. Drop this once the world has siblings.
+  planets[planets.length - 1].orbitSpeed = 0;
+
+  // Moon orbiting the starter planet. Constructor immediately repositions
+  // `center` via updateOrbitPosition, so the (0,0) we pass is only used by the
+  // isSun-detection check (which compares to the orbit anchor). Anchoring on
+  // planets[0].center means the moon will track the home world if we ever
+  // unpin the planet's orbit.
+  planets.push(new Planet(
+    createVector(0, 0),
+    2000 * scale,            // ~quarter the home-world radius
+    120, 90,                 // distinct color/feel from Pasture-1
+    3000000,                 // gentle gravity (~0.047 px/frame² at surface)
+    100000,                  // orbit radius, clear of the home atmosphere
+    planets[0].center
+  ));
   starting += spacing;
-  planets.push(new Planet(createVector(0, 0), 1000 * scale, 255, 255, density, starting, sun));
-  starting += spacing;
-  planets.push(new Planet(createVector(0, 0), 1200 * scale,  50, 180, density, starting, sun));
-  starting += spacing;
-  planets.push(new Planet(createVector(0, 0),  900 * scale, 255,  30, density, starting, sun));
-  starting += spacing;
-  planets.push(new Planet(createVector(0, 0), 1100 * scale,  50,  50, density, starting, sun));
-  starting += spacing;
+  // planets.push(new Planet(createVector(0, 0), 1000 * scale, 255, 255, density, starting, sun));
+  // starting += spacing;
+  // planets.push(new Planet(createVector(0, 0), 1200 * scale,  50, 180, density, starting, sun));
+  // starting += spacing;
+  // planets.push(new Planet(createVector(0, 0),  900 * scale, 255,  30, density, starting, sun));
+  // starting += spacing;
+  // planets.push(new Planet(createVector(0, 0), 1100 * scale,  50,  50, density, starting, sun));
+  // starting += spacing;
 
   // Sun: bigger and much less dense so it doesn't crush you.
-  planets.push(new Planet(sun.copy(), 4000 * scale, 255, 180, 2000, 0, sun));
+  // planets.push(new Planet(sun.copy(), 4000 * scale, 255, 180, 2000, 0, sun));
+
 
   // Outlier rogue planet.
-  planets.push(new Planet(createVector(-5000, 1000), 1000 * scale, 100, 400, density, 500, sun));
+  //planets.push(new Planet(createVector(-5000, 1000), 1000 * scale, 100, 400, density, 500, sun));
 
   assignPlanetNames();
 
@@ -169,41 +192,46 @@ function buildWorld() {
     base = new Base(starter, pickBaseAngle(starter));
   }
 }
-const MINIMAP_SIZE = 200;
 let minimapBuffer = null;
 
 function drawMinimap() {
-  // Set up minimap position and size
-  const mapSize = MINIMAP_SIZE;
+  // Both controlled from the debug panel so the player can pull the map out
+  // to a planning chart and dial the zoom to see whole orbits.
+  const mapSize = DEBUG.minimapSize;
   const padding = 20;
   const mapX = width - mapSize - padding;
   const mapY = padding;
-  const mapScale = 0.02; // Adjust this to show more/less of the game world
+  const mapScale = DEBUG.minimapZoom;
 
   if (!minimapBuffer) {
     minimapBuffer = createGraphics(mapSize, mapSize);
+    // Match the main canvas so view.rotation (degrees) can be passed straight
+    // to minimapBuffer.rotate without converting to radians.
+    minimapBuffer.angleMode(DEGREES);
+  } else if (minimapBuffer.width !== mapSize) {
+    minimapBuffer.resizeCanvas(mapSize, mapSize);
   }
   minimapBuffer.clear();
   minimapBuffer.background(0, 0, 0, 200);
-  
-  // Draw border on buffer
-  minimapBuffer.stroke(255);
-  minimapBuffer.strokeWeight(2);
-  minimapBuffer.noFill();
-  minimapBuffer.rect(0, 0, mapSize, mapSize);
 
   // Calculate center of minimap
   const centerX = mapSize/2;
   const centerY = mapSize/2;
 
   if (lander && lander.active) {
-    // Draw planets relative to lander position
+    // Rotate the minimap contents to match the main camera roll so screen-up
+    // and minimap-up always agree. The N/S/E/W labels (drawn inside the same
+    // transform) move with the world so "where's north?" stays answerable.
+    minimapBuffer.push();
+    minimapBuffer.translate(centerX, centerY);
+    minimapBuffer.rotate(view.rotation);
+
+    // Draw planets relative to lander position. We keep the disc + orbit pass
+    // separate from labels so all labels render on top regardless of overlap.
     for (let planet of planets) {
-      // Convert world coordinates to minimap coordinates, relative to lander
-      let minimapX = centerX + (planet.center.x - lander.pos.x) * mapScale;
-      let minimapY = centerY + (planet.center.y - lander.pos.y) * mapScale;
-      
-      // Draw planet
+      let minimapX = (planet.center.x - lander.pos.x) * mapScale;
+      let minimapY = (planet.center.y - lander.pos.y) * mapScale;
+
       minimapBuffer.noStroke();
       minimapBuffer.fill(planet.strokeColor);
       let minimapRadius = max(4, planet.baseRadius * mapScale);
@@ -215,18 +243,36 @@ function drawMinimap() {
       if (!planet.isSun) {
         let orbitRadius = planet.orbitRadius * mapScale;
         minimapBuffer.ellipse(
-          centerX + (planet.orbitCenter.x - lander.pos.x) * mapScale,
-          centerY + (planet.orbitCenter.y - lander.pos.y) * mapScale,
+          (planet.orbitCenter.x - lander.pos.x) * mapScale,
+          (planet.orbitCenter.y - lander.pos.y) * mapScale,
           orbitRadius * 2,
           orbitRadius * 2
         );
       }
     }
 
+    // Planet labels — counter-rotate so they read upright even with camera
+    // roll, and offset below each disc so the label doesn't sit on the planet.
+    minimapBuffer.textSize(11);
+    minimapBuffer.textAlign(CENTER, TOP);
+    minimapBuffer.noStroke();
+    for (let planet of planets) {
+      let minimapX = (planet.center.x - lander.pos.x) * mapScale;
+      let minimapY = (planet.center.y - lander.pos.y) * mapScale;
+      let r = max(4, planet.baseRadius * mapScale);
+      let label = planet.discovered ? (planet.name || "?") : "?";
+      minimapBuffer.push();
+      minimapBuffer.translate(minimapX, minimapY + r + 2);
+      minimapBuffer.rotate(-view.rotation);
+      minimapBuffer.fill(planet.discovered ? 230 : 140);
+      minimapBuffer.text(label, 0, 0);
+      minimapBuffer.pop();
+    }
+
     // Draw cows relative to lander position
     for (let cow of cows) {
-      let minimapX = centerX + (cow.pos.x - lander.pos.x) * mapScale;
-      let minimapY = centerY + (cow.pos.y - lander.pos.y) * mapScale;
+      let minimapX = (cow.pos.x - lander.pos.x) * mapScale;
+      let minimapY = (cow.pos.y - lander.pos.y) * mapScale;
       minimapBuffer.fill(0, 255, 0);
       minimapBuffer.noStroke();
       minimapBuffer.circle(minimapX, minimapY, 3);
@@ -236,13 +282,11 @@ function drawMinimap() {
     // minimap can show where you'll end up after several minutes of coasting.
     if (DEBUG.showTrajectory) {
       let pts = lander.predictLongTrajectory(timeScale, DEBUG.minimapTrajectorySteps, 4);
-      // Pre-project all visible points into minimap space, stopping when we
-      // leave a generous clip rectangle so distant slingshots don't streak.
-      let projected = [{ x: centerX, y: centerY }];
+      let projected = [{ x: 0, y: 0 }];
       for (let i = 0; i < pts.length; i++) {
-        let mx = centerX + (pts[i].x - lander.pos.x) * mapScale;
-        let my = centerY + (pts[i].y - lander.pos.y) * mapScale;
-        if (mx < -mapSize || mx > mapSize * 2 || my < -mapSize || my > mapSize * 2) break;
+        let mx = (pts[i].x - lander.pos.x) * mapScale;
+        let my = (pts[i].y - lander.pos.y) * mapScale;
+        if (mx < -mapSize || mx > mapSize || my < -mapSize || my > mapSize) break;
         projected.push({ x: mx, y: my });
       }
 
@@ -251,8 +295,6 @@ function drawMinimap() {
         minimapBuffer.stroke(80, 255, 220, 180);
         minimapBuffer.strokeWeight(1);
         minimapBuffer.beginShape();
-        // curveVertex needs control points at each end; duplicate the first
-        // and last so the spline passes through every visible sample.
         let first = projected[0];
         let last = projected[projected.length - 1];
         minimapBuffer.curveVertex(first.x, first.y);
@@ -264,41 +306,60 @@ function drawMinimap() {
 
     // Draw base relative to lander
     if (base) {
-      let bX = centerX + (base.pos.x - lander.pos.x) * mapScale;
-      let bY = centerY + (base.pos.y - lander.pos.y) * mapScale;
+      let bX = (base.pos.x - lander.pos.x) * mapScale;
+      let bY = (base.pos.y - lander.pos.y) * mapScale;
       minimapBuffer.fill(120, 220, 255);
       minimapBuffer.noStroke();
       minimapBuffer.circle(bX, bY, 6);
     }
 
-    // Draw lander in center
+    // Draw lander in center — rotation doesn't move the origin so this stays
+    // pinned to the minimap center regardless of camera roll.
     minimapBuffer.fill(255, 0, 0);
     minimapBuffer.noStroke();
-    minimapBuffer.circle(centerX, centerY, 4);
+    minimapBuffer.circle(0, 0, 4);
 
-    // Draw view rectangle centered on lander
+    // Draw view rectangle centered on lander. Because the buffer is rotated
+    // to match the main camera, this stays axis-aligned with the minimap
+    // frame, which is what the player actually sees on screen.
     minimapBuffer.noFill();
     minimapBuffer.stroke(255, 100);
     minimapBuffer.strokeWeight(1);
     let viewWidth = (width / view.scale) * mapScale;
     let viewHeight = (height / view.scale) * mapScale;
-    minimapBuffer.rect(
-      centerX - viewWidth/2, 
-      centerY - viewHeight/2, 
-      viewWidth, 
-      viewHeight
-    );
+    minimapBuffer.rect(-viewWidth/2, -viewHeight/2, viewWidth, viewHeight);
+
+    // Compass labels — positions rotate with the world (so "N" tracks true
+    // north), but each label counter-rotates internally so the glyph itself
+    // stays screen-upright and legible.
+    minimapBuffer.textSize(12);
+    minimapBuffer.textAlign(CENTER, CENTER);
+    minimapBuffer.fill(255);
+    minimapBuffer.noStroke();
+    const labelR = centerX - 15;
+    let labels = [
+      { t: "N", x: 0,        y: -labelR },
+      { t: "S", x: 0,        y:  labelR },
+      { t: "W", x: -labelR,  y: 0       },
+      { t: "E", x:  labelR,  y: 0       }
+    ];
+    for (let L of labels) {
+      minimapBuffer.push();
+      minimapBuffer.translate(L.x, L.y);
+      minimapBuffer.rotate(-view.rotation);
+      minimapBuffer.text(L.t, 0, 0);
+      minimapBuffer.pop();
+    }
+
+    minimapBuffer.pop();
   }
 
-  // Draw compass directions
-  minimapBuffer.textSize(12);
-  minimapBuffer.textAlign(CENTER, CENTER);
-  minimapBuffer.fill(255);
-  minimapBuffer.noStroke();
-  minimapBuffer.text('N', centerX, 15);
-  minimapBuffer.text('S', centerX, mapSize - 15);
-  minimapBuffer.text('W', 15, centerY);
-  minimapBuffer.text('E', mapSize - 15, centerY);
+  // Border drawn last and outside the rotation so the frame stays a clean
+  // square no matter how the contents are rolling.
+  minimapBuffer.stroke(255);
+  minimapBuffer.strokeWeight(2);
+  minimapBuffer.noFill();
+  minimapBuffer.rect(0, 0, mapSize, mapSize);
 
   // Draw the buffer to the screen
   image(minimapBuffer, mapX, mapY);
@@ -316,8 +377,12 @@ function draw() {
   }
 
   push();
-  translate(view.x, view.y);
+  // Camera transform: rotate + zoom around the focal point (lander), so
+  // pressing Q/E rolls the world view without sliding the ship off-screen.
+  translate(width / 2, height / 2);
+  rotate(view.rotation);
   scale(view.scale);
+  translate(-view.focusX, -view.focusY);
 
   // Draw every planet in the array
   for (let planet of planets) {
@@ -769,10 +834,9 @@ function showEvent(message, duration = 2800) {
 
 function resetView() {
   view.scale = 1;
+  view.rotation = 0;
   view.focusX = lander ? lander.pos.x : 0;
   view.focusY = lander ? lander.pos.y : 0;
-  view.x = width / 2 - view.focusX * view.scale;
-  view.y = height / 2 - view.focusY * view.scale;
 }
 
 function updateView() {
@@ -795,11 +859,6 @@ function updateView() {
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;
   view.focusX += (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
   view.focusY += (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
-
-  // Keep translation derived from the same focal point as zoom so scale changes
-  // do not make the ship slide around the screen.
-  view.x = width / 2 - view.focusX * view.scale;
-  view.y = height / 2 - view.focusY * view.scale;
 }
 
 function getClosestSurfaceDistance() {
@@ -1156,7 +1215,22 @@ function drawHUD() {
 
   text(`Fuel: ${floor(lander.fuel)} / ${lander.maxFuel}`, 20, 30);
   text(`Altitude: ${floor(lander.altitude)}`, 20, 50);
-  text(`Velocity: ${lander.vel.mag().toFixed(2)}`, 20, 70);
+
+  // Atmospheric drag readout: density and the resulting per-frame velocity
+  // bleed. The displayed number accounts for substepping (lander.update), so
+  // it never exceeds 100% even when k·ts is large.
+  let atmoDensity = 0;
+  for (let p of planets) atmoDensity += p.atmosphericDensity(lander.pos.x, lander.pos.y);
+  if (atmoDensity > 1) atmoDensity = 1;
+  let kts = DEBUG.atmosphereDrag * atmoDensity * timeScale;
+  let dragSubsteps = max(1, ceil(kts / SUBSTEP_MAX_KDT));
+  let dragPerFrame = 1 - pow(max(0, 1 - kts / dragSubsteps), dragSubsteps);
+  text(
+    `Velocity: ${lander.vel.mag().toFixed(2)}  Atmo: ${(atmoDensity * 100).toFixed(0)}%  Drag: ${(dragPerFrame * 100).toFixed(1)}%/f`,
+    20,
+    70
+  );
+
   text(`Cargo: ${cargo} / ${lander.maxCargo}`, 20, 90);
   text(`Delivered: ${delivered} / ${DELIVERY_GOAL}`, 20, 110);
   text(`Research: ${research}`, 20, 130);
@@ -1215,7 +1289,7 @@ function drawMissionReadout() {
     text(`Nearest: ${bodyName} (${floor(nearest.distance)}m)`, 20, 200);
   }
   text(`Specimens remaining: ${specimensRemaining}`, 20, 220);
-  text("Controls: A/D or ←/→ rotate  |  W or ↑ thrust  |  Click to zap  |  Space to beam up", 20, 240);
+  text("Controls: A/D rotate  |  W thrust  |  Q/E roll camera  |  Click zap  |  Space beam", 20, 240);
 }
 
 function getNearestPlanetInfo() {
@@ -1271,8 +1345,9 @@ function getNavTarget() {
 function drawNavTargetIndicator(target) {
   if (!target) return;
 
-  let screenX = target.pos.x * view.scale + view.x;
-  let screenY = target.pos.y * view.scale + view.y;
+  let screenPt = worldToScreen(target.pos.x, target.pos.y);
+  let screenX = screenPt.x;
+  let screenY = screenPt.y;
   let margin = 60;
   let onScreen =
     screenX > margin && screenX < width - margin &&
@@ -1400,14 +1475,37 @@ function pollInput(timeScale = 1) {
   else if (!wantThrust && thrustPlaying) stopThruster();
   lander.setThrust(wantThrust ? 1 : 0);
 
+  // Camera roll — handy when the ship starts on the side of a planet and
+  // "down" lands diagonally on screen. Independent of time scale so the camera
+  // stays responsive during slow-mo or fast-forward.
+  if (keyIsDown(KEY_Q)) view.rotation -= CAMERA_ROTATE_SPEED;
+  if (keyIsDown(KEY_E)) view.rotation += CAMERA_ROTATE_SPEED;
+
   // Tractor beam fires straight down from the ship's local frame while space is held.
   lander.abducting = keyIsDown(32);
 }
 
 function screenToWorld(sx, sy) {
+  // Inverse of the draw() camera transform: subtract screen center, rotate
+  // back, unscale, then translate by focus. Matches worldToScreen exactly.
+  let dx = sx - width / 2;
+  let dy = sy - height / 2;
+  let c = cos(-view.rotation);
+  let s = sin(-view.rotation);
   return {
-    x: (sx - view.x) / view.scale,
-    y: (sy - view.y) / view.scale
+    x: (c * dx - s * dy) / view.scale + view.focusX,
+    y: (s * dx + c * dy) / view.scale + view.focusY
+  };
+}
+
+function worldToScreen(wx, wy) {
+  let dx = (wx - view.focusX) * view.scale;
+  let dy = (wy - view.focusY) * view.scale;
+  let c = cos(view.rotation);
+  let s = sin(view.rotation);
+  return {
+    x: width / 2 + c * dx - s * dy,
+    y: height / 2 + s * dx + c * dy
   };
 }
 

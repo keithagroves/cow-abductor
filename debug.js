@@ -4,7 +4,7 @@ const DEBUG = {
   beamRange: 300,
   beamWidth: 20,
   planetRadiusScale: 4.0,
-  planetGravity: 1200000,
+  planetGravity: 125000000,
   planetSpacing: 14000,
   orbitSpeedScale: 1.0, // 0 freezes orbits, 1 = baseline random speeds
   pullStrength: 0.15,
@@ -13,6 +13,8 @@ const DEBUG = {
   cameraZoomDistance: 600,
   zoomOverride: 0, // 0 = use dynamic distance-based zoom; >0 forces this scale
   showTrajectory: true,
+  minimapSize: 280,
+  minimapZoom: 0.001,
   minimapTrajectorySteps: 320,
   atmosphereScale: 0.6,   // atmosphere top = baseRadius * (1 + atmosphereScale)
   atmosphereDrag: 0.015,  // drag coefficient at full density (0..1 per frame at scale=1)
@@ -27,7 +29,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 6;
+const DEBUG_VERSION = 9;
 
 function loadDebugFromStorage() {
   try {
@@ -62,7 +64,7 @@ const DEBUG_PARAMS = [
   { key: "beamRange",         label: "Beam Range",        min: 50,   max: 800,  step: 10,    live: true,  apply: (v) => { lander.beamRange = v; } },
   { key: "beamWidth",         label: "Beam Width",        min: 5,    max: 200,  step: 1,     live: true,  apply: (v) => { lander.beamWidth = v; } },
   { key: "pullStrength",      label: "Cow Pull",          min: 0.02, max: 0.5,  step: 0.01,  live: true,  apply: (v) => { for (let c of cows) c.pullStrength = v; } },
-  { key: "planetGravity",     label: "Planet Gravity",    min: 10000, max: 4000000, step: 20000, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.gravity = v; } },
+  { key: "planetGravity",     label: "Planet Gravity",    min: 1000000, max: 500000000, step: 1000000, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.gravity = v; } },
   { key: "planetRadiusScale", label: "Planet Size ×",     min: 0.5,  max: 10.0, step: 0.1,   live: false },
   { key: "planetSpacing",     label: "Planet Spacing",    min: 1500, max: 40000, step: 200,  live: false },
   { key: "orbitSpeedScale",   label: "Orbit Speed ×",     min: 0,    max: 2,    step: 0.05,  live: true },
@@ -70,6 +72,8 @@ const DEBUG_PARAMS = [
   { key: "cameraMaxZoom",     label: "Cam Max Zoom",      min: 0.2,  max: 4.0,  step: 0.05,  live: true },
   { key: "cameraZoomDistance",label: "Cam Zoom Range",    min: 100,  max: 4000, step: 50,    live: true },
   { key: "zoomOverride",      label: "Zoom Out (0 = off)", min: 0,   max: 1,    step: 0.002, live: true },
+  { key: "minimapSize",       label: "Map Size",          min: 150,  max: 800,  step: 10,    live: true },
+  { key: "minimapZoom",       label: "Map Zoom",          min: 0.001, max: 0.08, step: 0.001, live: true },
   { key: "minimapTrajectorySteps", label: "Map Traj Steps", min: 40, max: 1200, step: 20,    live: true },
   { key: "atmosphereScale",   label: "Atmo Thickness",    min: 0.1,  max: 3.0,  step: 0.05,  live: true },
   { key: "atmosphereDrag",    label: "Atmo Drag",         min: 0,    max: 0.2,  step: 0.005, live: true },

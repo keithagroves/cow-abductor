@@ -26,8 +26,10 @@ precision highp float;
 
 varying vec2 vTexCoord;
 uniform vec2 u_resolution;
-uniform vec2 u_viewOffset;
+uniform vec2 u_viewFocus;     // world point pinned to screen center
+uniform vec2 u_screenCenter;  // pixel coords of that pin
 uniform float u_viewScale;
+uniform float u_viewRotation; // radians, matches sketch.js camera roll
 uniform int u_planetCount;
 uniform vec2 u_planetPos[MAX_PLANETS];
 uniform float u_planetRadius[MAX_PLANETS];
@@ -36,11 +38,15 @@ uniform vec3 u_atmoColor[MAX_PLANETS];
 uniform vec2 u_sunPos;
 
 void main() {
-  // p5 P2D canvas is y-down; vTexCoord.y from WebGL is y-up. Flip so the
-  // pixel maps to the same world point sketch.js drew the planets at.
-  vec2 pixel = vec2(vTexCoord.x * u_resolution.x,
-                    (1.0 - vTexCoord.y) * u_resolution.y);
-  vec2 world = (pixel - u_viewOffset) / u_viewScale;
+  // vTexCoord maps 1:1 with P2D pixel coords once the WEBGL buffer is blitted
+  // by image(), so no Y flip is needed here.
+  vec2 pixel = vTexCoord * u_resolution;
+  // Inverse of the sketch.js camera transform: center → unrotate → unscale → +focus.
+  vec2 centered = pixel - u_screenCenter;
+  float c = cos(-u_viewRotation);
+  float s = sin(-u_viewRotation);
+  vec2 unrot = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+  vec2 world = unrot / u_viewScale + u_viewFocus;
 
   vec3 accum = vec3(0.0);
 
@@ -137,7 +143,14 @@ function drawAtmosphere() {
     if (p.isSun) continue;
     if (!p.hasAtmosphere || !p.hasAtmosphere()) continue;
     positions.push(p.center.x, p.center.y);
-    radii.push(p.baseRadius);
+    // Use the terrain's outer envelope (baseRadius + noiseIntensity) so the
+    // shader's glow ring starts above the highest peaks and doesn't bleed
+    // into pixels already covered by the noise-textured planet body.
+    let effectiveR = Math.min(
+      p.baseRadius + p.noiseIntensity,
+      p.atmosphereOuterRadius() * 0.95
+    );
+    radii.push(effectiveR);
     atmoRadii.push(p.atmosphereOuterRadius());
     let sky = planetSkyColor(p);
     colors.push(sky[0], sky[1], sky[2]);
@@ -154,8 +167,10 @@ function drawAtmosphere() {
   atmoBuffer.clear();
   atmoBuffer.shader(atmoShader);
   atmoShader.setUniform("u_resolution", [width, height]);
-  atmoShader.setUniform("u_viewOffset", [view.x, view.y]);
+  atmoShader.setUniform("u_viewFocus", [view.focusX, view.focusY]);
+  atmoShader.setUniform("u_screenCenter", [width / 2, height / 2]);
   atmoShader.setUniform("u_viewScale", view.scale);
+  atmoShader.setUniform("u_viewRotation", view.rotation * Math.PI / 180);
   atmoShader.setUniform("u_planetCount", count);
   atmoShader.setUniform("u_planetPos", positions);
   atmoShader.setUniform("u_planetRadius", radii);

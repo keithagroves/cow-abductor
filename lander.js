@@ -2,6 +2,11 @@ const TRAJECTORY_POINT_COUNT = 120;
 const TRAJECTORY_REFRESH_FRAMES = 4;
 const TRAJECTORY_MIN_DISTANCE_SQ = 1;
 const TRAJECTORY_DRAW_STRIDE = 3;
+// Drag is applied multiplicatively as (1 - k·dt). That form is only accurate
+// for small k·dt; once k·dt approaches 1 it zeros velocity outright (looks like
+// the ship is hovering). We substep update() so each piece sees at most this
+// much drag per slice.
+const SUBSTEP_MAX_KDT = 0.1;
 
 class Lander {
   constructor() {
@@ -160,6 +165,21 @@ class Lander {
     velocity.y *= factor;
   }
 
+  // Continuous-time drag multiplier for the trajectory predictors. The real
+  // simulation substeps applyAtmosphericDrag so its effective factor converges
+  // to exp(-k·dt); we use that closed form directly here so predictions match
+  // reality at any step size without needing the predictor to substep too.
+  predictDragFactor(simPosition, dt) {
+    if (DEBUG.atmosphereDrag <= 0 || DEBUG.atmosphereScale <= 0) return 1;
+    let totalDensity = 0;
+    for (let planet of planets) {
+      totalDensity += planet.atmosphericDensity(simPosition.x, simPosition.y);
+    }
+    if (totalDensity <= 0) return 1;
+    if (totalDensity > 1) totalDensity = 1;
+    return exp(-DEBUG.atmosphereDrag * totalDensity * dt);
+  }
+
   limitVelocity(velocity) {
     let speedSq = velocity.x * velocity.x + velocity.y * velocity.y;
     let topSpeedSq = this.topSpeed * this.topSpeed;
@@ -191,6 +211,11 @@ class Lander {
 
       for (let i = 0; i < TRAJECTORY_POINT_COUNT; i++) {
         this.applyGravityToVelocity(simVelocity, simPosition, timeScale);
+        let dragFactor = this.predictDragFactor(simPosition, timeScale);
+        if (dragFactor < 1) {
+          simVelocity.x *= dragFactor;
+          simVelocity.y *= dragFactor;
+        }
         this.limitVelocity(simVelocity);
 
         simPosition.x += simVelocity.x * timeScale;
@@ -236,9 +261,10 @@ class Lander {
     let simVX = this.vel.x;
     let simVY = this.vel.y;
 
-    // Trajectory is "coast path" — assumes no thrust and no drag, just gravity.
-    // This shows the player where they'd end up if they let go of all controls
-    // in vacuum, which is the most useful trajectory readout.
+    // Trajectory is "coast path" — assumes no thrust, but does include gravity
+    // and atmospheric drag so the line accurately curves down toward a planet
+    // once you punch into its atmosphere instead of pretending you'll skip
+    // off and continue coasting.
 
     // Don't bail out on the planet we're currently inside the bounding radius of
     // (e.g. when sitting on a surface) — only bail after we've left it.
@@ -255,6 +281,11 @@ class Lander {
         let velTmp = { x: simVX, y: simVY };
         let posTmp = { x: simX, y: simY };
         this.applyGravityToVelocity(velTmp, posTmp, timeScale);
+        let dragFactor = this.predictDragFactor(posTmp, timeScale);
+        if (dragFactor < 1) {
+          velTmp.x *= dragFactor;
+          velTmp.y *= dragFactor;
+        }
         simVX = velTmp.x;
         simVY = velTmp.y;
         let speedSq = simVX * simVX + simVY * simVY;
@@ -316,23 +347,37 @@ class Lander {
     // Smooth rotation
     this.rotation += (this.targetRotation - this.rotation) * 0.3 * timeScale;
 
-    // Apply gravitational forces
-    this.vel.add(this.calculateGravityVector(this.pos, timeScale));
+    // Pick substep count from current atmospheric density. When k·dt approaches
+    // 1, the multiplicative drag formula collapses velocity to zero and the
+    // ship visibly hovers; splitting the step keeps each slice in the stable
+    // regime regardless of timeScale or atmosphereDrag.
+    let densityNow = 0;
+    for (let planet of planets) {
+      densityNow += planet.atmosphericDensity(this.pos.x, this.pos.y);
+    }
+    if (densityNow > 1) densityNow = 1;
+    let kdt = DEBUG.atmosphereDrag * densityNow * timeScale;
+    let substeps = max(1, ceil(kdt / SUBSTEP_MAX_KDT));
+    let dt = timeScale / substeps;
 
-    // Apply thrust
+    // Fuel burn is per-frame, independent of substep slicing.
     if (this.thrusting > 0 && this.fuel > 0) {
-      this.applyThrustToVelocity(this.vel, timeScale);
       this.fuel -= 0.2 * this.thrusting * timeScale;
     }
 
-    // Atmospheric drag (after thrust so engines still propel you through air).
-    this.applyAtmosphericDrag(this.vel, this.pos, timeScale);
+    for (let i = 0; i < substeps; i++) {
+      this.vel.add(this.calculateGravityVector(this.pos, dt));
 
-    // Limit speed
-    this.limitVelocity(this.vel);
+      // Thrust is folded into each substep so a single-frame burn at high
+      // timeScale doesn't overshoot the drag it should have fought through.
+      if (this.thrusting > 0 && this.fuel > 0) {
+        this.applyThrustToVelocity(this.vel, dt);
+      }
 
-    // Update position
-    this.pos.add(this.vel.copy().mult(timeScale));
+      this.applyAtmosphericDrag(this.vel, this.pos, dt);
+      this.limitVelocity(this.vel);
+      this.pos.add(this.vel.copy().mult(dt));
+    }
 
     // Update collision points
     this.bottomLeft = createVector(

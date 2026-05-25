@@ -28,8 +28,59 @@ class Planet {
     this.landscape = this.generateLandscape();
     this.snakeShapes = this.generateSnakeShapes();
     this.alien = new Alien(this.center, baseRadius, this.strokeColor);
-    
+    this.surfaceTexture = this.generateSurfaceTexture();
+  }
 
+  generateSurfaceTexture() {
+    const SIZE = 256;
+    let gfx = createGraphics(SIZE, SIZE);
+    // Force 1:1 so our pixel-write loop indexing matches the buffer layout
+    // even on retina displays (where the default density is 2 and would make
+    // the pixels array 4× larger than the loop covers).
+    gfx.pixelDensity(1);
+
+    // Sample a unique region of the noise field per planet so no two planets
+    // share the same surface pattern.
+    let seedOffset =
+      (red(this.fillColor) + green(this.fillColor) * 3.7 + blue(this.fillColor) * 11.3) *
+      0.097;
+
+    let baseR = red(this.fillColor);
+    let baseG = green(this.fillColor);
+    let baseB = blue(this.fillColor);
+
+    gfx.loadPixels();
+    for (let py = 0; py < SIZE; py++) {
+      for (let px = 0; px < SIZE; px++) {
+        let x = px * 0.012 + seedOffset;
+        let y = py * 0.012 + seedOffset * 2.3;
+
+        // 4-octave FBM so the surface has both broad regions and fine detail.
+        let n = 0, amp = 0.5, freq = 1;
+        for (let o = 0; o < 4; o++) {
+          n += amp * noise(x * freq, y * freq);
+          freq *= 2.1;
+          amp *= 0.5;
+        }
+
+        // Stretch the typical noise range so we get more contrast than the
+        // default 0.3..0.7 band noise() tends to produce.
+        let t = constrain((n - 0.3) / 0.5, 0, 1);
+        let factor = 0.5 + t * 1.1;
+
+        let r = constrain(baseR * factor, 0, 255);
+        let g = constrain(baseG * factor, 0, 255);
+        let b = constrain(baseB * factor, 0, 255);
+
+        let idx = (py * SIZE + px) * 4;
+        gfx.pixels[idx]     = r;
+        gfx.pixels[idx + 1] = g;
+        gfx.pixels[idx + 2] = b;
+        gfx.pixels[idx + 3] = 255;
+      }
+    }
+    gfx.updatePixels();
+    return gfx;
   }
 
   updateOrbitPosition() {
@@ -205,14 +256,28 @@ class Planet {
       ctx.fill();
     }
 
-    // Draw planet
-    stroke(this.strokeColor);
-    fill(this.fillColor);
-    beginShape();
-    for (let p of this.landscape) {
-      vertex(p.x, p.y);
+    // Draw planet body — noise-textured fill clipped to the terrain polygon,
+    // then stroke the silhouette separately so the planet still has its
+    // colored outline.
+    let ctx = drawingContext;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(this.landscape[0].x, this.landscape[0].y);
+    for (let i = 1; i < this.landscape.length; i++) {
+      ctx.lineTo(this.landscape[i].x, this.landscape[i].y);
     }
-    endShape();
+    ctx.closePath();
+    ctx.clip();
+
+    let texR = this.baseRadius + this.noiseIntensity;
+    image(
+      this.surfaceTexture,
+      this.center.x - texR,
+      this.center.y - texR,
+      texR * 2,
+      texR * 2
+    );
+    ctx.restore();
 
     // Draw snake shapes
     push();
