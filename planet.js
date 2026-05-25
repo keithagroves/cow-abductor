@@ -24,11 +24,84 @@ class Planet {
       this.orbitEccentricity = 0;
     }
 
+    // Water level above the spherical base. Anything where the terrain dips
+    // below this radius is flooded; peaks above poke through as land. Default
+    // 0 = airless rock / dry world. Set via setSeaLevel() from outside so
+    // landable arcs are re-placed above the new water line.
+    this.seaLevel = 0;
+
     this.updateOrbitPosition();
     this.landscape = this.generateLandscape();
+    this.placeLandableArcs();
     this.snakeShapes = this.generateSnakeShapes();
     this.alien = new Alien(this.center, baseRadius, this.strokeColor);
     this.surfaceTexture = this.generateSurfaceTexture();
+    // Clouds populate on construction for any planet with atmosphere. Stored
+    // as {angle, altitude, length, thickness, drift} and rendered as soft
+    // ellipses tangent to their orbit.
+    this.clouds = this.hasAtmosphere() ? this.generateClouds() : [];
+    // Background ridge silhouette — a second landscape with a different noise
+    // seed and slightly larger amplitude. Rendered before the main terrain in
+    // an atmospheric-haze color so its peaks read as distant mountains behind
+    // the foreground silhouette (Hollow-Knight-style depth on the ground).
+    this.backgroundRidge = this.hasAtmosphere() ? this.generateBackgroundRidge() : [];
+  }
+
+  generateBackgroundRidge() {
+    // 3× the main terrain's resolution — bg ridge ends up with finer detail
+    // along the silhouette without affecting collision/landing (which still
+    // uses this.landscape).
+    let pointCount = this.numPoints * 3;
+    let angleStep = 360 / pointCount;
+    // Independent seed so this ridge's peaks don't align with main terrain's.
+    let noiseOffset = random(1000) + 500;
+    let points = [];
+    // Amplitude slightly larger than the main terrain so some peaks rise
+    // above the foreground silhouette and become visible "horizon" mountains.
+    let amplitude = this.noiseIntensity * 1.3;
+    for (let i = 0; i < pointCount; i++) {
+      let angle = i * angleStep;
+      let r = this.baseRadius + noise(noiseOffset) * amplitude;
+      noiseOffset += 0.06; // broader features than main terrain (which steps 0.1)
+      points.push({ angle, r, x: 0, y: 0 });
+    }
+    points.push({ ...points[0] });
+    return points;
+  }
+
+  generateClouds() {
+    let clouds = [];
+    let atmoThickness = this.baseRadius * DEBUG.atmosphereScale;
+
+    // High layer — wispy, far above the peaks, barely drifts. Reads as the
+    // background of the atmosphere.
+    for (let i = 0; i < 10; i++) {
+      clouds.push({
+        layer: "high",
+        angle: random(360),
+        altitude: this.noiseIntensity + atmoThickness * random(0.35, 0.6),
+        length: this.baseRadius * random(0.025, 0.06),
+        thickness: this.baseRadius * random(0.006, 0.014),
+        drift: random(0.004, 0.012) * (random() < 0.5 ? -1 : 1),
+        opacity: 0.55
+      });
+    }
+
+    // Low layer — denser, hugging the peaks, drifts much faster. The speed
+    // contrast vs. the high layer is what sells the depth illusion.
+    for (let i = 0; i < 10; i++) {
+      clouds.push({
+        layer: "low",
+        angle: random(360),
+        altitude: this.noiseIntensity + atmoThickness * random(0.04, 0.18),
+        length: this.baseRadius * random(0.012, 0.03),
+        thickness: this.baseRadius * random(0.004, 0.01),
+        drift: random(0.04, 0.08) * (random() < 0.5 ? -1 : 1),
+        opacity: 1.0
+      });
+    }
+
+    return clouds;
   }
 
   generateSurfaceTexture() {
@@ -93,11 +166,34 @@ class Planet {
     this.center.y = this.orbitCenter.y + r * sin(this.orbitAngle);
   }
 
+  // Switch this planet off the kinematic "go in a circle" path and onto the
+  // same gravity-driven integration the ship uses. Seeds vel with the speed
+  // needed for a circular orbit at the current radius around the parent body
+  // referenced by orbitCenter.
+  useGravityOrbit() {
+    if (!this.orbitCenter) return;
+    let dx = this.center.x - this.orbitCenter.x;
+    let dy = this.center.y - this.orbitCenter.y;
+    let r = sqrt(dx * dx + dy * dy);
+    if (r < 1) return;
+    // Find the parent body by reference identity on its center vector — that's
+    // how callers wire moon → planet without us inventing a new field.
+    let parent = planets.find(p => p.center === this.orbitCenter);
+    let parentGravity = parent ? parent.gravity : this.gravity;
+    // v² = g_parent / r for a circular orbit in our 1/r² gravity model.
+    let speed = sqrt(parentGravity / r);
+    // Tangent perpendicular to the radial vector (one of the two CCW/CW
+    // directions — either gives a stable orbit).
+    this.vel = createVector(-dy / r * speed, dx / r * speed);
+    this.physicsOrbit = true;
+  }
+
   // Per-frame velocity at timeScale=1 (i.e. how far the planet moves in one
   // simulation step). Use this to inherit orbital motion when landing/spawning
   // so the ship rides with the planet instead of getting swept past it.
   getOrbitalVelocity() {
     if (this.isSun) return createVector(0, 0);
+    if (this.physicsOrbit) return createVector(this.vel.x, this.vel.y);
     let scale = (typeof DEBUG !== "undefined" && DEBUG.orbitSpeedScale !== undefined) ? DEBUG.orbitSpeedScale : 1;
     let effectiveSpeed = this.orbitSpeed * scale;
     let nextAngle = this.orbitAngle + effectiveSpeed;
@@ -107,10 +203,41 @@ class Planet {
     return createVector(nextX - this.center.x, nextY - this.center.y);
   }
 
+  advanceClouds(timeScale) {
+    if (!this.hasAtmosphere() || !this.clouds) return;
+    for (let c of this.clouds) c.angle += c.drift * timeScale;
+  }
+
   update(timeScale = 1) {
     if (this.isSun) {
       this.alien.update(timeScale);
       this.updateLandscapePoints();
+      this.advanceClouds(timeScale);
+      return;
+    }
+
+    if (this.physicsOrbit) {
+      // Symplectic Euler: gravity first (from every other body), then move
+      // with the updated velocity. Stable for orbital motion across long
+      // horizons, unlike forward Euler which spirals outward.
+      let gx = 0, gy = 0;
+      for (let p of planets) {
+        if (p === this) continue;
+        let dx = p.center.x - this.center.x;
+        let dy = p.center.y - this.center.y;
+        let distSq = max(1, dx * dx + dy * dy);
+        let dist = sqrt(distSq);
+        let force = p.gravity / distSq;
+        gx += (dx / dist) * force;
+        gy += (dy / dist) * force;
+      }
+      this.vel.x += gx * timeScale;
+      this.vel.y += gy * timeScale;
+      this.center.x += this.vel.x * timeScale;
+      this.center.y += this.vel.y * timeScale;
+      this.alien.update(timeScale);
+      this.updateLandscapePoints();
+      this.advanceClouds(timeScale);
       return;
     }
 
@@ -118,10 +245,11 @@ class Planet {
     let scale = (typeof DEBUG !== "undefined" && DEBUG.orbitSpeedScale !== undefined) ? DEBUG.orbitSpeedScale : 1;
     this.orbitAngle += this.orbitSpeed * scale * timeScale;
     this.alien.update(timeScale);
-    
+
     this.updateOrbitPosition();
     // Update landscape points relative to new center
     this.updateLandscapePoints();
+    this.advanceClouds(timeScale);
   }
   updateLandscapePoints() {
     for (let point of this.landscape) {
@@ -129,6 +257,12 @@ class Planet {
       let r = point.r;
       point.x = this.center.x + r * cos(angle);
       point.y = this.center.y + r * sin(angle);
+    }
+    if (this.backgroundRidge) {
+      for (let point of this.backgroundRidge) {
+        point.x = this.center.x + point.r * cos(point.angle);
+        point.y = this.center.y + point.r * sin(point.angle);
+      }
     }
   }
   generateLandscape() {
@@ -147,6 +281,10 @@ class Planet {
       points.push({
         angle: angle,
         r: r,
+        // Remember the noise-driven radius so placeLandableArcs can reset
+        // before re-flattening when sea level changes. Without this we'd
+        // permanently lose the noise terrain after the first flatten pass.
+        noiseR: r,
         x: x,
         y: y,
         landable: false
@@ -156,20 +294,62 @@ class Planet {
     // close the loop
     points.push({ ...points[0] });
 
-    // flatten arcs
-    for (let i = 0; i < 3; i++) {
-      let idx = floor(random(this.numPoints));
-      for (let j = 0; j < 5; j++) {
-        let k = (idx + j) % this.numPoints;
-        points[k].r = this.baseRadius;
-        points[k].landable = true;
-        let a = points[k].angle;
-        points[k].x = this.center.x + points[k].r * cos(a);
-        points[k].y = this.center.y + points[k].r * sin(a);
-      }
+    return points;
+  }
+
+  // Picks 3 random arcs along the terrain and flattens them into landing pads.
+  // Re-runs from the stored noise r so calling this after setSeaLevel() resets
+  // any prior flattening cleanly. Behavior splits on whether the planet has
+  // water:
+  //   - Dry world: flatten to baseRadius (the old valley-floor behavior, so
+  //     the moon's pads keep working).
+  //   - Water world: only seed arcs at noise indices already above sea level,
+  //     and flatten to that index's own r so the pad is a plateau on a
+  //     continent rather than a submerged valley.
+  placeLandableArcs() {
+    if (!this.landscape) return;
+    // Reset every point to its stored noise r so we don't double-flatten.
+    for (let p of this.landscape) {
+      p.r = p.noiseR;
+      p.landable = false;
+      p.x = this.center.x + p.r * cos(p.angle);
+      p.y = this.center.y + p.r * sin(p.angle);
     }
 
-    return points;
+    let hasWater = this.seaLevel > 0;
+    // 50 px of clearance above the water surface so pads aren't lapping.
+    let minR = this.baseRadius + this.seaLevel + 50;
+    let placed = 0;
+    let attempts = 0;
+    while (placed < 3 && attempts < 100) {
+      attempts++;
+      let idx = floor(random(this.numPoints));
+      if (hasWater && this.landscape[idx].noiseR < minR) continue;
+      let flatR = hasWater ? this.landscape[idx].noiseR : this.baseRadius;
+      for (let j = 0; j < 5; j++) {
+        let k = (idx + j) % this.numPoints;
+        this.landscape[k].r = flatR;
+        this.landscape[k].landable = true;
+        let a = this.landscape[k].angle;
+        this.landscape[k].x = this.center.x + flatR * cos(a);
+        this.landscape[k].y = this.center.y + flatR * sin(a);
+      }
+      placed++;
+    }
+    // Mirror the close-of-loop helper point so the final segment still draws.
+    if (this.landscape.length > this.numPoints) {
+      let first = this.landscape[0];
+      let last = this.landscape[this.landscape.length - 1];
+      last.r = first.r;
+      last.landable = first.landable;
+      last.x = first.x;
+      last.y = first.y;
+    }
+  }
+
+  setSeaLevel(level) {
+    this.seaLevel = level;
+    this.placeLandableArcs();
   }
 
   generateSnakeShapes() {
@@ -256,6 +436,32 @@ class Planet {
       ctx.fill();
     }
 
+    // Background ridge — distant-mountain silhouette painted in atmospheric
+    // haze, drawn before the main terrain so its peaks read as horizon hills
+    // behind the foreground. Only the parts that stick above the foreground
+    // outline are visible; the rest gets covered when we draw the main body.
+    // Gated by hasAtmosphere() at render time so airless bodies (moon) don't
+    // pick up the haze even though the ridge was generated in the constructor.
+    if (this.hasAtmosphere() && this.backgroundRidge && this.backgroundRidge.length > 0) {
+      push();
+      noStroke();
+      // Blend the planet's own fill with the atmosphere's sky color and
+      // darken slightly so distance reads.
+      let baseR = red(this.fillColor);
+      let baseG = green(this.fillColor);
+      let baseB = blue(this.fillColor);
+      let bgR = baseR * 0.45 + 90 * 0.55;
+      let bgG = baseG * 0.45 + 130 * 0.55;
+      let bgB = baseB * 0.45 + 180 * 0.55;
+      fill(bgR, bgG, bgB, 220);
+      beginShape();
+      for (let p of this.backgroundRidge) {
+        vertex(p.x, p.y);
+      }
+      endShape(CLOSE);
+      pop();
+    }
+
     // Draw planet body — noise-textured fill clipped to the terrain polygon,
     // then stroke the silhouette separately so the planet still has its
     // colored outline.
@@ -277,7 +483,72 @@ class Planet {
       texR * 2,
       texR * 2
     );
+
     ctx.restore();
+
+    // Water — drawn *after* the terrain clip is released so the disk
+    // actually fills valleys up to sea level. Clipped to the terrain
+    // polygon (as it used to be) the disk would be cropped at the
+    // silhouette and valleys would end up dry. Mountain peaks rising
+    // past rSea remain visible because the disk simply doesn't reach
+    // their radius.
+    if (this.seaLevel > 0) {
+      let rSea = this.baseRadius + this.seaLevel;
+      noStroke();
+      fill(30, 80, 150, 215);
+      circle(this.center.x, this.center.y, rSea * 2);
+
+      // Bright shoreline only along the arcs where water actually meets
+      // sky — i.e. landscape segments whose terrain dips below sea level.
+      // A full circle here would cut a ring through mountains where the
+      // rim sits underground.
+      stroke(180, 230, 255, 200);
+      strokeWeight(2);
+      noFill();
+      for (let i = 0; i < this.landscape.length - 1; i++) {
+        let p1 = this.landscape[i];
+        let p2 = this.landscape[i + 1];
+        if (p1.r < rSea && p2.r < rSea) {
+          let x1 = this.center.x + rSea * cos(p1.angle);
+          let y1 = this.center.y + rSea * sin(p1.angle);
+          let x2 = this.center.x + rSea * cos(p2.angle);
+          let y2 = this.center.y + rSea * sin(p2.angle);
+          line(x1, y1, x2, y2);
+        }
+      }
+    }
+
+    // Cloud layers — drawn outside the terrain clip so they sit above the
+    // surface and can extend past the silhouette. Render the high (far) layer
+    // first so the low (near) layer overlaps it; combined with the ~6× drift
+    // speed gap, the relative motion reads as parallax depth.
+    if (this.hasAtmosphere() && this.clouds && this.clouds.length > 0) {
+      push();
+      noStroke();
+      // Two passes so back-to-front order is enforced regardless of array order.
+      for (let pass = 0; pass < 2; pass++) {
+        let wantLayer = pass === 0 ? "high" : "low";
+        for (let c of this.clouds) {
+          if (c.layer !== wantLayer) continue;
+          let r = this.baseRadius + c.altitude;
+          let cx = this.center.x + r * cos(c.angle);
+          let cy = this.center.y + r * sin(c.angle);
+          push();
+          translate(cx, cy);
+          // Tangent-aligned so clouds streak along their drift direction.
+          rotate(c.angle + 90);
+          let a = c.opacity;
+          fill(255, 255, 255, 70 * a);
+          ellipse(0, 0, c.length * 1.4, c.thickness * 1.6);
+          fill(255, 255, 255, 110 * a);
+          ellipse(0, 0, c.length * 1.1, c.thickness * 1.2);
+          fill(255, 255, 255, 180 * a);
+          ellipse(0, 0, c.length * 0.8, c.thickness * 0.8);
+          pop();
+        }
+      }
+      pop();
+    }
 
     // Draw snake shapes
     push();
@@ -322,7 +593,11 @@ class Planet {
   }
 
   hasAtmosphere() {
-    return !this.isSun;
+    if (this.isSun) return false;
+    // Per-planet override — set `planet.atmosphere = false` on airless bodies
+    // like moons. Default true keeps every other planet behaving as before.
+    if (this.atmosphere === false) return false;
+    return true;
   }
 
   atmosphereOuterRadius() {

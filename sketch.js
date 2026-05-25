@@ -14,6 +14,7 @@ let base;
 let delivered = 0;
 let research = 0;
 let burnParticles = [];
+let splashParticles = [];
 let stars = [];
 let cowImage;
 let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0 };
@@ -149,24 +150,38 @@ function buildWorld() {
   // Inner planets (radii scale with the debug multiplier).
   // Building the universe one planet at a time — uncomment the next worlds
   // once the starter feels right.
-  planets.push(new Planet(createVector(0, 0),  8000 * scale, 255, 255, density, starting, sun));
+  // noise 2000 + sea level 1100 → continents poke through ocean roughly
+  // half-and-half. Dial seaLevel up to flood the world, down for an arid one.
+  planets.push(new Planet(createVector(0, 0),  8000 * scale, 2000, 255, density, starting, sun));
   // Pin the starter while we tune it — orbital motion under the ship causes
   // weird relative-physics artifacts. Drop this once the world has siblings.
   planets[planets.length - 1].orbitSpeed = 0;
+  // setSeaLevel — not a plain assignment — so landable arcs get re-placed
+  // above the new water line. Otherwise pads end up flattened at baseRadius,
+  // which is 1100 px under the sea.
+  planets[planets.length - 1].setSeaLevel(1100);
 
   // Moon orbiting the starter planet. Constructor immediately repositions
   // `center` via updateOrbitPosition, so the (0,0) we pass is only used by the
   // isSun-detection check (which compares to the orbit anchor). Anchoring on
-  // planets[0].center means the moon will track the home world if we ever
-  // unpin the planet's orbit.
-  planets.push(new Planet(
+  // planets[0].center means useGravityOrbit() can resolve the parent body by
+  // reference identity and seed the right circular-orbit velocity.
+  let moon = new Planet(
     createVector(0, 0),
     2000 * scale,            // ~quarter the home-world radius
-    120, 90,                 // distinct color/feel from Pasture-1
+    1800, 330,               // big noise span + dense sampling = jagged surface
     3000000,                 // gentle gravity (~0.047 px/frame² at surface)
-    100000,                  // orbit radius, clear of the home atmosphere
+    100000,                  // initial radius — physics takes over from here
     planets[0].center
-  ));
+  );
+  // Airless rock — drag/burn/atmosphere shader all skip it via this flag.
+  moon.atmosphere = false;
+  planets.push(moon);
+  // Move the moon under the same gravity integrator the ship uses, with vel
+  // seeded for a stable circular orbit. The orbit can be perturbed (e.g. by
+  // future planets) and will respond physically instead of snapping back to
+  // its kinematic ring.
+  moon.useGravityOrbit();
   starting += spacing;
   // planets.push(new Planet(createVector(0, 0), 1000 * scale, 255, 255, density, starting, sun));
   // starting += spacing;
@@ -392,6 +407,7 @@ function draw() {
   if (base) base.draw();
 
   drawBurnParticles();
+  drawSplashParticles();
   lander.render(timeScale);
 
   // Render plants under cows so glow blends nicely.
@@ -436,6 +452,7 @@ function resetGame() {
   initializeCows();
   initializePlants();
   burnParticles = [];
+  splashParticles = [];
   lasers = [];
   // Spawn the player on the first non-sun planet so they start grounded near specimens.
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
@@ -490,6 +507,9 @@ function liftOff() {
     let orb = lander.nearestPlanet.getOrbitalVelocity();
     lander.vel.set(orb.x, orb.y);
   }
+  // Drop the landing anchor — back to free flight.
+  lander.landingPlanet = null;
+  lander.landingOffset = null;
   gameState = GAME_STATES.PLAYING;
 }
 
@@ -574,6 +594,16 @@ function updateWorld(timeScale = 1) {
   }
 
   if (base) base.update(timeScale);
+
+  // If we're parked on a body that just moved (e.g. the moon's physics orbit),
+  // snap the ship to its landing offset so it rides the surface instead of
+  // staying behind in world coords. lander.update is a no-op in LANDED state,
+  // so the position has to be enforced here.
+  if (gameState === GAME_STATES.LANDED && lander.landingPlanet && lander.landingOffset) {
+    lander.pos.x = lander.landingPlanet.center.x + lander.landingOffset.x;
+    lander.pos.y = lander.landingPlanet.center.y + lander.landingOffset.y;
+  }
+
   lander.update(timeScale);
   // If thrust got cut (e.g. out of fuel mid-burn), make sure the rocket noise stops.
   if (lander.thrusting <= 0 && thrustPlaying) {
@@ -590,6 +620,8 @@ function updateWorld(timeScale = 1) {
   }
 
   updateBurnParticles(timeScale);
+  updateWaterInteraction(timeScale);
+  updateSplashParticles(timeScale);
   updateDiscoveries();
   logDiagnostics();
 }
@@ -661,19 +693,27 @@ function logDiagnostics() {
 }
 
 function updateBurnParticles(timeScale = 1) {
-  // Re-entry burn: emit particles when the ship moves fast through dense atmosphere.
+  // Re-entry burn: emit particles when the ship moves fast *relative to the
+  // atmosphere it's in*. Sitting on a moving moon's surface should not glow
+  // red, even though the ship's world-frame velocity is high.
   if (lander && lander.active) {
-    let density = 0;
-    for (let p of planets) {
-      density += p.atmosphericDensity(lander.pos.x, lander.pos.y);
-    }
-    density = constrain(density, 0, 1);
-    let speed = lander.vel.mag();
-    let excess = max(0, speed - DEBUG.burnSpeedThreshold);
-    let intensity = density * excess;
-    if (intensity > 0) {
-      let count = floor(intensity * DEBUG.burnIntensity * timeScale);
-      for (let i = 0; i < count; i++) emitBurnParticle(intensity);
+    let sample = lander.sampleAtmosphereAt(lander.pos);
+    if (sample.density > 0) {
+      let pvx = 0, pvy = 0;
+      if (sample.planet && sample.planet.getOrbitalVelocity) {
+        let pv = sample.planet.getOrbitalVelocity();
+        pvx = pv.x;
+        pvy = pv.y;
+      }
+      let relVx = lander.vel.x - pvx;
+      let relVy = lander.vel.y - pvy;
+      let relSpeed = sqrt(relVx * relVx + relVy * relVy);
+      let excess = max(0, relSpeed - DEBUG.burnSpeedThreshold);
+      let intensity = sample.density * excess;
+      if (intensity > 0) {
+        let count = floor(intensity * DEBUG.burnIntensity * timeScale);
+        for (let i = 0; i < count; i++) emitBurnParticle(intensity, relVx, relVy);
+      }
     }
   }
 
@@ -688,11 +728,146 @@ function updateBurnParticles(timeScale = 1) {
   }
 }
 
-function emitBurnParticle(intensity) {
-  let speed = lander.vel.mag();
+// Water contact: emit a splash burst the first frame the ship crosses sea
+// level, drag heavily while submerged, and crash once fully underwater. The
+// "fully submerged" rule (dCenter < rSea - radius) means the player gets one
+// brief moment to see the splash before drowning.
+function updateWaterInteraction(timeScale = 1) {
+  if (!lander || !lander.active) return;
+  if (gameState !== GAME_STATES.PLAYING) return;
+  let planet = lander.nearestPlanet;
+  if (!planet || !planet.seaLevel || planet.seaLevel <= 0) return;
+
+  let dx = lander.pos.x - planet.center.x;
+  let dy = lander.pos.y - planet.center.y;
+  let dCenter = sqrt(dx * dx + dy * dy);
+  let rSea = planet.baseRadius + planet.seaLevel;
+
+  let touchingWater = dCenter < rSea + lander.radius;
+  if (!touchingWater) {
+    lander.inWater = false;
+    return;
+  }
+
+  if (!lander.inWater) {
+    emitWaterSplashBurst(planet, lander.pos, lander.vel);
+    lander.inWater = true;
+  }
+
+  // Heavy drag, time-scale invariant. Gravity keeps pulling toward the
+  // planet center each frame so the ship still settles downward.
+  let dragPerFrame = pow(0.92, timeScale);
+  lander.vel.x *= dragPerFrame;
+  lander.vel.y *= dragPerFrame;
+
+  // Trickle of bubbles while sinking so the ship isn't a silent rock.
+  if (frameCount % 4 === 0) emitWaterBubble(planet, lander.pos);
+
+  if (dCenter < rSea - lander.radius) {
+    lander.crash();
+    gameState = GAME_STATES.CRASHED;
+  }
+}
+
+function emitWaterSplashBurst(planet, pos, vel) {
+  let speed = vel.mag();
+  let count = floor(constrain(speed * 1.5, 12, 60));
+  // Outward normal from planet center to splash origin.
+  let dx = pos.x - planet.center.x;
+  let dy = pos.y - planet.center.y;
+  let d = max(1, sqrt(dx * dx + dy * dy));
+  let nx = dx / d;
+  let ny = dy / d;
+  let tx = -ny;
+  let ty = nx;
+  let baseSpeed = constrain(speed * 0.4, 2, 8);
+  for (let i = 0; i < count; i++) {
+    // Mostly upward (outward) with a tangential spread to fan the spray out.
+    let nFactor = random(0.4, 1.1);
+    let tFactor = random(-0.8, 0.8);
+    let spd = baseSpeed * random(0.6, 1.4);
+    splashParticles.push({
+      x: pos.x,
+      y: pos.y,
+      vx: (nx * nFactor + tx * tFactor) * spd,
+      vy: (ny * nFactor + ty * tFactor) * spd,
+      planet: planet,
+      life: random(0.7, 1.3),
+      size: random(2.5, 6),
+      bubble: false
+    });
+  }
+}
+
+function emitWaterBubble(planet, pos) {
+  let dx = pos.x - planet.center.x;
+  let dy = pos.y - planet.center.y;
+  let d = max(1, sqrt(dx * dx + dy * dy));
+  let nx = dx / d;
+  let ny = dy / d;
+  let tx = -ny;
+  let ty = nx;
+  let jitter = random(-lander.radius * 0.6, lander.radius * 0.6);
+  splashParticles.push({
+    x: pos.x + tx * jitter,
+    y: pos.y + ty * jitter,
+    // Bubbles drift outward (toward the surface) slowly. Gravity will fight
+    // them but they're short-lived so they read as upward motion.
+    vx: nx * random(0.4, 1.2),
+    vy: ny * random(0.4, 1.2),
+    planet: planet,
+    life: random(0.4, 0.9),
+    size: random(1.5, 3.5),
+    bubble: true
+  });
+}
+
+function updateSplashParticles(timeScale = 1) {
+  for (let i = splashParticles.length - 1; i >= 0; i--) {
+    let p = splashParticles[i];
+    if (p.planet) {
+      let dx = p.planet.center.x - p.x;
+      let dy = p.planet.center.y - p.y;
+      let dSq = max(1, dx * dx + dy * dy);
+      let d = sqrt(dSq);
+      // Bubbles get a fraction of gravity so they appear to rise; splash
+      // droplets feel full gravity and arc back down.
+      let g = p.bubble ? p.planet.gravity * 0.15 : p.planet.gravity;
+      let force = g / dSq;
+      p.vx += (dx / d) * force * timeScale;
+      p.vy += (dy / d) * force * timeScale;
+    }
+    p.x += p.vx * timeScale;
+    p.y += p.vy * timeScale;
+    p.life -= 0.025 * timeScale;
+    if (p.life <= 0) splashParticles.splice(i, 1);
+  }
+}
+
+function drawSplashParticles() {
+  noStroke();
+  for (let p of splashParticles) {
+    let alpha = 230 * p.life;
+    if (p.bubble) {
+      fill(200, 230, 255, alpha * 0.7);
+      circle(p.x, p.y, p.size * (0.5 + p.life * 0.5));
+    } else {
+      // Bright white core with a blue halo so droplets pop against the dark water.
+      fill(150, 200, 240, alpha * 0.5);
+      circle(p.x, p.y, p.size * 1.4);
+      fill(230, 245, 255, alpha);
+      circle(p.x, p.y, p.size * (0.5 + p.life * 0.6));
+    }
+  }
+}
+
+function emitBurnParticle(intensity, relVx, relVy) {
+  // Direction is the ship's motion *through the atmosphere*, not its world-
+  // frame velocity. On a moving moon those differ by ~35 px/frame.
+  let speed = sqrt(relVx * relVx + relVy * relVy);
   if (speed === 0) return;
-  let dirX = lander.vel.x / speed;
-  let dirY = lander.vel.y / speed;
+  let dirX = relVx / speed;
+  let dirY = relVy / speed;
   // Leading edge of the ship, with a bit of jitter so it's not a single point.
   let lateralX = -dirY;
   let lateralY = dirX;
@@ -700,7 +875,8 @@ function emitBurnParticle(intensity) {
   let emitX = lander.pos.x + dirX * lander.radius + lateralX * jitter;
   let emitY = lander.pos.y + dirY * lander.radius + lateralY * jitter;
 
-  // Trail behind the ship with some angular spread.
+  // Trail drifts with the actual ship velocity (world frame) so particles
+  // appear left behind as the ship sweeps along its real path.
   let trailAngle = atan2(-dirY, -dirX) + random(-22, 22);
   let trailSpeed = random(0.8, 2.2);
   let pvx = cos(trailAngle) * trailSpeed + lander.vel.x * 0.35;
@@ -857,8 +1033,20 @@ function updateView() {
   }
 
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;
-  view.focusX += (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
-  view.focusY += (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
+
+  // Add the ship's world-frame velocity each step so easing only has to
+  // correct displacement, not chase a constantly-moving target. Without this
+  // the focus lags by vel/ease pixels at steady state (~190 px when riding
+  // the moon at 35 px/frame).
+  let worldVx = lander.vel.x;
+  let worldVy = lander.vel.y;
+  if (gameState === GAME_STATES.LANDED && lander.landingPlanet && lander.landingPlanet.getOrbitalVelocity) {
+    let pv = lander.landingPlanet.getOrbitalVelocity();
+    worldVx = pv.x;
+    worldVy = pv.y;
+  }
+  view.focusX += worldVx * timeScale + (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
+  view.focusY += worldVy * timeScale + (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
 }
 
 function getClosestSurfaceDistance() {

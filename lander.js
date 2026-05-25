@@ -25,6 +25,10 @@ class Lander {
     this.altitude = 0;
     this.thrustLevel = 0;
     this.nearestPlanet = null;
+    // Captured at touchdown so the ship rides a moving body (e.g. the moon)
+    // instead of staying frozen in world coords while the planet orbits out.
+    this.landingPlanet = null;
+    this.landingOffset = null;
     this.radius =20;
     // Physics constants
     this.gravity = 0.0;
@@ -58,6 +62,9 @@ class Lander {
     this.active = true;
     this.thrusting = 0;
     this.fuel = this.maxFuel;
+    this.landingPlanet = null;
+    this.landingOffset = null;
+    this.inWater = false;
     this.trajectoryPoints = [];
     this.trajectoryOffsets = [];
     this.trajectoryLastFrame = -Infinity;
@@ -85,8 +92,19 @@ class Lander {
     this.active = false;
     this.thrusting = 0;
     this.abducting = false;
-    this.vel.mult(0); // Stop all movement
-    
+    this.vel.mult(0); // Stop all movement (relative to the landing body)
+
+    // Stick the ship to whatever we touched down on. The world-frame snap
+    // happens in updateWorld each frame so the ship rides along if the body
+    // is on a physics orbit.
+    if (this.nearestPlanet) {
+      this.landingPlanet = this.nearestPlanet;
+      this.landingOffset = createVector(
+        this.pos.x - this.nearestPlanet.center.x,
+        this.pos.y - this.nearestPlanet.center.y
+      );
+    }
+
     console.log("Lander landed safely!");
   }
   setThrust(power) {
@@ -151,33 +169,59 @@ class Lander {
     velocity.y -= cos(this.rotation) * thrustForce;
   }
 
-  applyAtmosphericDrag(velocity, position, timeScale = 1) {
-    if (DEBUG.atmosphereDrag <= 0 || DEBUG.atmosphereScale <= 0) return;
-    let totalDensity = 0;
-    for (let planet of planets) {
-      totalDensity += planet.atmosphericDensity(position.x, position.y);
+  // Sums atmospheric density at `position` and identifies the planet
+  // contributing most of it. Drag and re-entry burn use this so they operate
+  // in the *atmosphere's* frame (which moves with its planet) — co-moving
+  // with the moon then feels like sitting still, not flying through a wind
+  // tunnel at orbital speed.
+  sampleAtmosphereAt(position) {
+    if (DEBUG.atmosphereDrag <= 0 || DEBUG.atmosphereScale <= 0) {
+      return { density: 0, planet: null };
     }
-    if (totalDensity <= 0) return;
+    let totalDensity = 0;
+    let dominantPlanet = null;
+    let dominantDensity = 0;
+    for (let planet of planets) {
+      let d = planet.atmosphericDensity(position.x, position.y);
+      totalDensity += d;
+      if (d > dominantDensity) {
+        dominantDensity = d;
+        dominantPlanet = planet;
+      }
+    }
     if (totalDensity > 1) totalDensity = 1;
-    let factor = 1 - DEBUG.atmosphereDrag * totalDensity * timeScale;
-    if (factor < 0) factor = 0;
-    velocity.x *= factor;
-    velocity.y *= factor;
+    return { density: totalDensity, planet: dominantPlanet };
   }
 
-  // Continuous-time drag multiplier for the trajectory predictors. The real
-  // simulation substeps applyAtmosphericDrag so its effective factor converges
-  // to exp(-k·dt); we use that closed form directly here so predictions match
-  // reality at any step size without needing the predictor to substep too.
-  predictDragFactor(simPosition, dt) {
-    if (DEBUG.atmosphereDrag <= 0 || DEBUG.atmosphereScale <= 0) return 1;
-    let totalDensity = 0;
-    for (let planet of planets) {
-      totalDensity += planet.atmosphericDensity(simPosition.x, simPosition.y);
+  applyAtmosphericDrag(velocity, position, timeScale = 1) {
+    let sample = this.sampleAtmosphereAt(position);
+    if (sample.density <= 0) return;
+    let factor = 1 - DEBUG.atmosphereDrag * sample.density * timeScale;
+    if (factor < 0) factor = 0;
+    let pvx = 0, pvy = 0;
+    if (sample.planet && sample.planet.getOrbitalVelocity) {
+      let pv = sample.planet.getOrbitalVelocity();
+      pvx = pv.x;
+      pvy = pv.y;
     }
-    if (totalDensity <= 0) return 1;
-    if (totalDensity > 1) totalDensity = 1;
-    return exp(-DEBUG.atmosphereDrag * totalDensity * dt);
+    velocity.x = pvx + (velocity.x - pvx) * factor;
+    velocity.y = pvy + (velocity.y - pvy) * factor;
+  }
+
+  // Continuous-time drag for the trajectory predictors. Returns the factor
+  // and the atmosphere's frame velocity so the caller can apply drag toward
+  // that frame instead of toward world-frame zero.
+  predictAtmosphereDrag(simPosition, dt) {
+    let sample = this.sampleAtmosphereAt(simPosition);
+    if (sample.density <= 0) return null;
+    let factor = exp(-DEBUG.atmosphereDrag * sample.density * dt);
+    let pvx = 0, pvy = 0;
+    if (sample.planet && sample.planet.getOrbitalVelocity) {
+      let pv = sample.planet.getOrbitalVelocity();
+      pvx = pv.x;
+      pvy = pv.y;
+    }
+    return { factor, pvx, pvy };
   }
 
   limitVelocity(velocity) {
@@ -211,10 +255,10 @@ class Lander {
 
       for (let i = 0; i < TRAJECTORY_POINT_COUNT; i++) {
         this.applyGravityToVelocity(simVelocity, simPosition, timeScale);
-        let dragFactor = this.predictDragFactor(simPosition, timeScale);
-        if (dragFactor < 1) {
-          simVelocity.x *= dragFactor;
-          simVelocity.y *= dragFactor;
+        let drag = this.predictAtmosphereDrag(simPosition, timeScale);
+        if (drag && drag.factor < 1) {
+          simVelocity.x = drag.pvx + (simVelocity.x - drag.pvx) * drag.factor;
+          simVelocity.y = drag.pvy + (simVelocity.y - drag.pvy) * drag.factor;
         }
         this.limitVelocity(simVelocity);
 
@@ -281,10 +325,10 @@ class Lander {
         let velTmp = { x: simVX, y: simVY };
         let posTmp = { x: simX, y: simY };
         this.applyGravityToVelocity(velTmp, posTmp, timeScale);
-        let dragFactor = this.predictDragFactor(posTmp, timeScale);
-        if (dragFactor < 1) {
-          velTmp.x *= dragFactor;
-          velTmp.y *= dragFactor;
+        let drag = this.predictAtmosphereDrag(posTmp, timeScale);
+        if (drag && drag.factor < 1) {
+          velTmp.x = drag.pvx + (velTmp.x - drag.pvx) * drag.factor;
+          velTmp.y = drag.pvy + (velTmp.y - drag.pvy) * drag.factor;
         }
         simVX = velTmp.x;
         simVY = velTmp.y;
