@@ -7,12 +7,11 @@ class Planet {
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
     this.numPoints = numPoints;
-    // Sandy-granite tone: warm orange with a low brown/gray floor so the
-    // planet reads as desert rock rather than the prior yellow. Texture
-    // variation comes from generateSurfaceTexture() rather than the base
-    // color, so a single tint keeps things consistent.
-    this.strokeColor = color(180, 110, 70);
-    this.fillColor   = color(200, 135, 85);
+    // Dark rock tone — slightly warm grey so the planet reads as weathered
+    // stone. Texture variation comes from generateSurfaceTexture() rather than
+    // the base color, so a single tint keeps things consistent.
+    this.strokeColor = color(75, 72, 70);
+    this.fillColor   = color(110, 105, 100);
     this.gravity = density;
    // Add orbital parameters
     if(this.center.x !== sun.x || this.center.y !== sun.y){
@@ -109,16 +108,16 @@ class Planet {
         let t = constrain((n - 0.3) / 0.5, 0, 1);
 
         let r, g, b;
-        // Texture lakes/seas — on water worlds, paint the low-noise basins
-        // as water so the planet body shows oceans head-on, not just at the
-        // silhouette. The "depth" goes shallow (near WATER_LEVEL) to deep
-        // (t == 0), giving lakes a gentle gradient instead of flat colour.
-        const WATER_LEVEL = 0.32;
-        if (this.seaLevel > 0 && t < WATER_LEVEL) {
-          let depth = t / WATER_LEVEL; // 0 deep, 1 just-below-shore
-          r = lerp(15, 55, depth);
-          g = lerp(60, 130, depth);
-          b = lerp(120, 195, depth);
+        // On worlds with water, paint the low-noise band as vegetation
+        // (mossy lowlands fading from deep grass to lighter scrub near the
+        // rock line). Above the grass band, fall through to the rock tint
+        // driven by the base color so peaks read as exposed stone.
+        const GRASS_LEVEL = 0.45;
+        if (this.seaLevel > 0 && t < GRASS_LEVEL) {
+          let depth = t / GRASS_LEVEL; // 0 deep moss → 1 scrub-near-rock
+          r = lerp(45, 120, depth);
+          g = lerp(85, 150, depth);
+          b = lerp(40, 80, depth);
         } else {
           let factor = 0.5 + t * 1.1;
           r = constrain(baseR * factor, 0, 255);
@@ -239,13 +238,64 @@ class Planet {
     }
   }
   generateLandscape() {
-    let angleStep = 360 / this.numPoints;
     let noiseOffset = random(1000);
     let points = [];
 
+    // 1-2 mountain "range" centers per planet. Angles near these get more
+    // points (clustering) and higher noise amplitude (taller spikes), so the
+    // silhouette gets dramatic jagged regions while the rest stays smooth.
+    let numRanges = floor(random(1, 3));
+    let ranges = [];
+    for (let i = 0; i < numRanges; i++) {
+      ranges.push({
+        center: random(360),
+        width: random(14, 22),     // gaussian sigma in degrees
+        intensity: random(2.5, 4)  // density multiplier at the center
+      });
+    }
+    // Cache range membership at any angle so we don't recompute the gaussian
+    // sum five times per point.
+    let rangeWeight = (theta) => {
+      let w = 0;
+      for (let r of ranges) {
+        let delta = ((theta - r.center + 540) % 360) - 180;
+        w += r.intensity * exp(-(delta * delta) / (2 * r.width * r.width));
+      }
+      return w;
+    };
+
+    // Inverse-CDF sample: bucket the density (1 + range weight) across the
+    // circle, then map uniform i/numPoints to angle via the cumulative sum.
+    // Monotonic by construction, so the polygon can't self-intersect no
+    // matter how strong the clustering gets.
+    const BUCKETS = 720;
+    let cumulative = new Float32Array(BUCKETS + 1);
+    for (let i = 0; i < BUCKETS; i++) {
+      let theta = (i + 0.5) * (360 / BUCKETS);
+      cumulative[i + 1] = cumulative[i] + 1 + rangeWeight(theta);
+    }
+    let totalMass = cumulative[BUCKETS];
+    let angleAt = (t) => {
+      let target = t * totalMass;
+      let lo = 0, hi = BUCKETS;
+      while (lo < hi) {
+        let mid = (lo + hi) >> 1;
+        if (cumulative[mid] < target) lo = mid + 1;
+        else hi = mid;
+      }
+      let idx = max(0, lo - 1);
+      let frac = (target - cumulative[idx]) / (cumulative[idx + 1] - cumulative[idx]);
+      return (idx + frac) * (360 / BUCKETS);
+    };
+
     for (let i = 0; i < this.numPoints; i++) {
-      let angle = i * angleStep;
-      let r = this.baseRadius + noise(noiseOffset) * this.noiseIntensity;
+      let angle = angleAt(i / this.numPoints);
+      // Bump amplitude inside ranges so clustered points get taller peaks on
+      // top of their already-higher visual frequency (more samples per degree
+      // through the same noise field).
+      let w = rangeWeight(angle);
+      let amp = this.noiseIntensity * (1 + w * 0.6);
+      let r = this.baseRadius + noise(noiseOffset) * amp;
       noiseOffset += 0.1;
 
       let x = this.center.x + r * cos(angle);
@@ -292,20 +342,51 @@ class Planet {
     let hasWater = this.seaLevel > 0;
     // 50 px of clearance above the water surface so pads aren't lapping.
     let minR = this.baseRadius + this.seaLevel + 50;
+    // Flatten by angular width so pads stay consistent across clustered and
+    // sparse regions of the new mountain-range terrain. ±4° ≈ 8° total arc.
+    let halfWidth = 4;
+    // Reject pad candidates whose neighbors just outside the pad arc rise
+    // steeply above the pad floor — otherwise pads placed on the shoulder of
+    // a mountain cluster spawn the lander next to an instant cliff. Buffer
+    // checks the same arc width on each side, and the cliff tolerance scales
+    // with noiseIntensity so the gate is consistent across planet sizes.
+    let bufferOuter = halfWidth * 2;
+    let cliffTolerance = this.noiseIntensity * 0.15;
     let placed = 0;
     let attempts = 0;
-    while (placed < 3 && attempts < 100) {
+    while (placed < 3 && attempts < 300) {
       attempts++;
-      let idx = floor(random(this.numPoints));
-      if (hasWater && this.landscape[idx].noiseR < minR) continue;
-      let flatR = hasWater ? this.landscape[idx].noiseR : this.baseRadius;
-      for (let j = 0; j < 5; j++) {
-        let k = (idx + j) % this.numPoints;
-        this.landscape[k].r = flatR;
-        this.landscape[k].landable = true;
-        let a = this.landscape[k].angle;
-        this.landscape[k].x = this.center.x + flatR * cos(a);
-        this.landscape[k].y = this.center.y + flatR * sin(a);
+      let centerAngle = random(360);
+
+      let nearest = -1;
+      let bestDelta = 360;
+      for (let i = 0; i < this.numPoints; i++) {
+        let d = abs(((this.landscape[i].angle - centerAngle + 540) % 360) - 180);
+        if (d < bestDelta) { bestDelta = d; nearest = i; }
+      }
+      if (hasWater && this.landscape[nearest].noiseR < minR) continue;
+      let flatR = hasWater ? this.landscape[nearest].noiseR : this.baseRadius;
+
+      let safe = true;
+      for (let i = 0; i < this.numPoints; i++) {
+        let d = abs(((this.landscape[i].angle - centerAngle + 540) % 360) - 180);
+        if (d > halfWidth && d <= bufferOuter) {
+          if (this.landscape[i].noiseR > flatR + cliffTolerance) {
+            safe = false;
+            break;
+          }
+        }
+      }
+      if (!safe) continue;
+
+      for (let i = 0; i < this.numPoints; i++) {
+        let d = abs(((this.landscape[i].angle - centerAngle + 540) % 360) - 180);
+        if (d > halfWidth) continue;
+        this.landscape[i].r = flatR;
+        this.landscape[i].landable = true;
+        let a = this.landscape[i].angle;
+        this.landscape[i].x = this.center.x + flatR * cos(a);
+        this.landscape[i].y = this.center.y + flatR * sin(a);
       }
       placed++;
     }
