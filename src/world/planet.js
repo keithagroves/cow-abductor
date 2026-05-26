@@ -139,11 +139,24 @@ class Planet {
         // Stretch the typical noise range so we get more contrast than the
         // default 0.3..0.7 band noise() tends to produce.
         let t = constrain((n - 0.3) / 0.5, 0, 1);
-        let factor = 0.5 + t * 1.1;
 
-        let r = constrain(baseR * factor, 0, 255);
-        let g = constrain(baseG * factor, 0, 255);
-        let b = constrain(baseB * factor, 0, 255);
+        let r, g, b;
+        // Texture lakes/seas — on water worlds, paint the low-noise basins
+        // as water so the planet body shows oceans head-on, not just at the
+        // silhouette. The "depth" goes shallow (near WATER_LEVEL) to deep
+        // (t == 0), giving lakes a gentle gradient instead of flat colour.
+        const WATER_LEVEL = 0.32;
+        if (this.seaLevel > 0 && t < WATER_LEVEL) {
+          let depth = t / WATER_LEVEL; // 0 deep, 1 just-below-shore
+          r = lerp(15, 55, depth);
+          g = lerp(60, 130, depth);
+          b = lerp(120, 195, depth);
+        } else {
+          let factor = 0.5 + t * 1.1;
+          r = constrain(baseR * factor, 0, 255);
+          g = constrain(baseG * factor, 0, 255);
+          b = constrain(baseB * factor, 0, 255);
+        }
 
         let idx = (py * SIZE + px) * 4;
         gfx.pixels[idx]     = r;
@@ -350,6 +363,11 @@ class Planet {
   setSeaLevel(level) {
     this.seaLevel = level;
     this.placeLandableArcs();
+    // Regenerate the surface texture so its low-noise basins repaint as
+    // water. Without this the initial dry-world texture (generated when
+    // seaLevel was still 0 in the constructor) stays in place even after
+    // the sea floods in.
+    this.surfaceTexture = this.generateSurfaceTexture();
   }
 
   generateSnakeShapes() {
@@ -462,6 +480,18 @@ class Planet {
       pop();
     }
 
+    // Water disk — drawn *behind* the planet body so the terrain texture on
+    // top stays fully visible. The disk only ends up visible in the annular
+    // slice between the polygon edge and rSea at valley angles (where the
+    // polygon dips below sea level). Mountains whose r exceeds rSea cover
+    // the disk completely at their angle, so they read as continuous land.
+    let rSea = this.seaLevel > 0 ? this.baseRadius + this.seaLevel : 0;
+    if (rSea > 0) {
+      noStroke();
+      fill(30, 90, 160);
+      circle(this.center.x, this.center.y, rSea * 2);
+    }
+
     // Draw planet body — noise-textured fill clipped to the terrain polygon,
     // then stroke the silhouette separately so the planet still has its
     // colored outline.
@@ -486,22 +516,11 @@ class Planet {
 
     ctx.restore();
 
-    // Water — drawn *after* the terrain clip is released so the disk
-    // actually fills valleys up to sea level. Clipped to the terrain
-    // polygon (as it used to be) the disk would be cropped at the
-    // silhouette and valleys would end up dry. Mountain peaks rising
-    // past rSea remain visible because the disk simply doesn't reach
-    // their radius.
-    if (this.seaLevel > 0) {
-      let rSea = this.baseRadius + this.seaLevel;
-      noStroke();
-      fill(30, 80, 150, 215);
-      circle(this.center.x, this.center.y, rSea * 2);
-
-      // Bright shoreline only along the arcs where water actually meets
-      // sky — i.e. landscape segments whose terrain dips below sea level.
-      // A full circle here would cut a ring through mountains where the
-      // rim sits underground.
+    // Shoreline rim — bright line at rSea, only along landscape segments
+    // whose terrain dips below sea level (the visible water-meets-sky arcs).
+    // Anywhere terrain rises above rSea the rim is hidden behind the texture
+    // we just drew, which is exactly what we want.
+    if (rSea > 0) {
       stroke(180, 230, 255, 200);
       strokeWeight(2);
       noFill();

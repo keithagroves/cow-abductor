@@ -150,16 +150,16 @@ function buildWorld() {
   // Inner planets (radii scale with the debug multiplier).
   // Building the universe one planet at a time — uncomment the next worlds
   // once the starter feels right.
-  // noise 2000 + sea level 1100 → continents poke through ocean roughly
-  // half-and-half. Dial seaLevel up to flood the world, down for an arid one.
+  // noise 2000 + sea level 800 → ~40% water, ~60% land. Dial seaLevel up to
+  // flood the world, down for an arid one.
   planets.push(new Planet(createVector(0, 0),  8000 * scale, 2000, 255, density, starting, sun));
   // Pin the starter while we tune it — orbital motion under the ship causes
   // weird relative-physics artifacts. Drop this once the world has siblings.
   planets[planets.length - 1].orbitSpeed = 0;
   // setSeaLevel — not a plain assignment — so landable arcs get re-placed
   // above the new water line. Otherwise pads end up flattened at baseRadius,
-  // which is 1100 px under the sea.
-  planets[planets.length - 1].setSeaLevel(1100);
+  // far under the sea.
+  planets[planets.length - 1].setSeaLevel(800);
 
   // Moon orbiting the starter planet. Constructor immediately repositions
   // `center` via updateOrbitPosition, so the (0,0) we pass is only used by the
