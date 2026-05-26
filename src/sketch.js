@@ -15,6 +15,7 @@ let delivered = 0;
 let research = 0;
 let burnParticles = [];
 let splashParticles = [];
+let crashParticles = [];
 let stars = [];
 let cowImage;
 let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0 };
@@ -24,9 +25,6 @@ let eventMessage = "";
 let eventMessageUntil = 0;
 let touchable = "ontouchstart" in window;
 let backgroundMusic=null;
-let shipImage;
-let shipFlameImage;
-let shipFlameImage2;
 let alienGroundImage;
 let rocketSound;
 let thrustPlaying = false;
@@ -54,9 +52,6 @@ function preload() {
   cowImage = loadImage("assets/images/darkCow.png");
   alienImage = loadImage("assets/images/alien.png");
   alienGroundImage = loadImage("assets/images/unnamed.png");
-  shipImage = loadImage("assets/images/ship.png");
-  shipFlameImage = loadImage("assets/images/shipflame.png");
-  shipFlameImage2 = loadImage("assets/images/flame2.png");
   backgroundMusic = loadSound("assets/audio/leaving-for-good.mp3");
 }
 
@@ -404,6 +399,9 @@ function draw() {
     updateWorld(timeScale);
     updateView();
   }
+  // Crash debris keeps animating after the ship is destroyed, so it runs
+  // outside the PLAYING gate.
+  updateCrashParticles(timeScale);
 
   // Atmosphere glow goes down first (ADD on the starfield), then clouds
   // BLEND on top of it. Both are behind the planet — the planet's surface
@@ -431,6 +429,7 @@ function draw() {
   drawBurnParticles();
   drawSplashParticles();
   lander.render(timeScale);
+  drawCrashParticles();
 
   // Render plants under cows so glow blends nicely.
   for (let plant of flora) {
@@ -473,6 +472,7 @@ function resetGame() {
   initializePlants();
   burnParticles = [];
   splashParticles = [];
+  crashParticles = [];
   lasers = [];
   // Spawn the player on the first non-sun planet so they start grounded near specimens.
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
@@ -729,6 +729,7 @@ function updateBurnParticles(timeScale = 1) {
   // Re-entry burn: emit particles when the ship moves fast *relative to the
   // atmosphere it's in*. Sitting on a moving moon's surface should not glow
   // red, even though the ship's world-frame velocity is high.
+  let intensity = 0;
   if (lander && lander.active) {
     let sample = lander.sampleAtmosphereAt(lander.pos);
     if (sample.density > 0) {
@@ -742,11 +743,30 @@ function updateBurnParticles(timeScale = 1) {
       let relVy = lander.vel.y - pvy;
       let relSpeed = sqrt(relVx * relVx + relVy * relVy);
       let excess = max(0, relSpeed - DEBUG.burnSpeedThreshold);
-      let intensity = sample.density * excess;
+      intensity = sample.density * excess;
       if (intensity > 0) {
         let count = floor(intensity * DEBUG.burnIntensity * timeScale);
         for (let i = 0; i < count; i++) emitBurnParticle(intensity, relVx, relVy);
       }
+    }
+  }
+
+  // Hull heating — runs regardless of active state so a landed ship cools off
+  // instead of staying red-hot, but the burn-through crash only triggers
+  // while the ship is alive and the game is in PLAYING.
+  if (lander) {
+    if (intensity > 0) {
+      lander.heat += intensity * DEBUG.heatGain * timeScale;
+    } else {
+      lander.heat -= DEBUG.heatCool * timeScale;
+    }
+    lander.heat = constrain(lander.heat, 0, DEBUG.heatMax);
+
+    if (lander.active && lander.heat >= DEBUG.heatMax && gameState === GAME_STATES.PLAYING) {
+      spawnCrashEffect(lander.pos.x, lander.pos.y, lander.vel.x, lander.vel.y, lander.rotation, lander.scale);
+      lander.crash();
+      gameState = GAME_STATES.CRASHED;
+      if (typeof showEvent === "function") showEvent("Hull burned through!");
     }
   }
 
@@ -797,6 +817,7 @@ function updateWaterInteraction(timeScale = 1) {
   if (frameCount % 4 === 0) emitWaterBubble(planet, lander.pos);
 
   if (dCenter < rSea - lander.radius) {
+    spawnCrashEffect(lander.pos.x, lander.pos.y, lander.vel.x, lander.vel.y, lander.rotation, lander.scale);
     lander.crash();
     gameState = GAME_STATES.CRASHED;
   }
@@ -1025,6 +1046,306 @@ function drawBurnParticles() {
   }
 }
 
+// Each ship part has a draw function (centered on its own origin) and the
+// local-frame offset where it lived on the hull. On crash we copy these into
+// "part" particles that fly outward from where they were attached.
+const SHIP_PARTS = [
+  { lx: 0,   ly: -22, draw: drawCrashConeChunk },
+  { lx: 0,   ly: -6,  draw: drawCrashHullTopChunk },
+  { lx: 0,   ly: 8,   draw: drawCrashHullBottomChunk },
+  { lx: 0,   ly: -13, draw: drawCrashCockpitChunk },
+  { lx: -23, ly: 10,  draw: drawCrashLeftFinChunk },
+  { lx: 23,  ly: 10,  draw: drawCrashRightFinChunk },
+  { lx: 0,   ly: 18,  draw: drawCrashEngineBellChunk },
+  { lx: 0,   ly: -32, draw: drawCrashAntennaChunk },
+];
+
+// One-shot pyrotechnics for a fatal crash: a flash, an expanding shockwave
+// ring, the ship's own components flying apart Lunar-Lander style, plus
+// embers, smaller debris, and lingering smoke.
+function spawnCrashEffect(x, y, vx = 0, vy = 0, shipRot = 0, shipScale = 0.8) {
+  crashParticles.push({ kind: "flash", x, y, life: 1 });
+  crashParticles.push({ kind: "shockwave", x, y, radius: 6, maxRadius: 110, life: 1 });
+
+  let inheritVx = vx * 0.3;
+  let inheritVy = vy * 0.3;
+
+  // Ship components — each piece spawns at the world-space location it was
+  // attached, then accelerates outward from the ship center so it visibly
+  // separates from its neighbors.
+  for (let part of SHIP_PARTS) {
+    let lxS = part.lx * shipScale;
+    let lyS = part.ly * shipScale;
+    let cr = cos(shipRot);
+    let sr = sin(shipRot);
+    let dx = lxS * cr - lyS * sr;
+    let dy = lxS * sr + lyS * cr;
+    let wx = x + dx;
+    let wy = y + dy;
+
+    // Outward direction = from ship center toward this part. Add a small
+    // angular perturbation so the spray doesn't look like a wheel.
+    let mag = sqrt(dx * dx + dy * dy);
+    let nx, ny;
+    if (mag > 0.01) {
+      nx = dx / mag;
+      ny = dy / mag;
+    } else {
+      let a = random(360);
+      nx = cos(a); ny = sin(a);
+    }
+    let perturb = random(-30, 30);
+    let pnx = nx * cos(perturb) - ny * sin(perturb);
+    let pny = nx * sin(perturb) + ny * cos(perturb);
+    let outSpeed = random(2.5, 5.5);
+
+    crashParticles.push({
+      kind: "part",
+      x: wx, y: wy,
+      vx: pnx * outSpeed + inheritVx,
+      vy: pny * outSpeed + inheritVy - random(0.4, 1.4),
+      rot: shipRot,
+      rotSpeed: random(-22, 22),
+      scale: shipScale,
+      draw: part.draw,
+      life: 1,
+      decay: random(0.003, 0.006),  // parts linger long enough to read
+    });
+  }
+
+  // A handful of small generic chunks for visual confetti around the parts.
+  for (let i = 0; i < 10; i++) {
+    let a = random(360);
+    let s = random(2, 7);
+    crashParticles.push({
+      kind: "debris", x, y,
+      vx: cos(a) * s + inheritVx,
+      vy: sin(a) * s + inheritVy - 1,
+      rot: random(360),
+      rotSpeed: random(-25, 25),
+      size: random(1.5, 3.5),
+      life: 1,
+      decay: random(0.006, 0.014),
+      hull: random() < 0.55,
+    });
+  }
+
+  for (let i = 0; i < 22; i++) {
+    let a = random(360);
+    let s = random(3, 10);
+    crashParticles.push({
+      kind: "spark", x, y,
+      vx: cos(a) * s + inheritVx,
+      vy: sin(a) * s + inheritVy - 1.5,
+      life: 1,
+      decay: random(0.025, 0.05),
+      size: random(1, 2.6),
+    });
+  }
+
+  for (let i = 0; i < 14; i++) {
+    let a = random(360);
+    let s = random(0.5, 2);
+    crashParticles.push({
+      kind: "smoke",
+      x: x + random(-4, 4),
+      y: y + random(-4, 4),
+      vx: cos(a) * s,
+      vy: sin(a) * s - 0.4,
+      life: 1,
+      decay: random(0.004, 0.01),
+      size: random(8, 16),
+    });
+  }
+}
+
+// Ship-part draw helpers — each renders one chunk of the rocket centered on
+// (0,0) so it can tumble around its own pivot. Colors mirror drawShipBody().
+function drawCrashConeChunk() {
+  noStroke();
+  fill(70, 80, 95);
+  // Cone tip + a slice of the upper hull around it.
+  beginShape();
+  vertex(0, -8);
+  vertex(-7, 4);
+  vertex(7, 4);
+  endShape(CLOSE);
+}
+
+function drawCrashHullTopChunk() {
+  noStroke();
+  fill(70, 80, 95);
+  beginShape();
+  vertex(-14, -6);
+  vertex(-18, 6);
+  vertex(18, 6);
+  vertex(14, -6);
+  endShape(CLOSE);
+  fill(120, 200, 220);
+  rect(-6, -4, 12, 10);
+}
+
+function drawCrashHullBottomChunk() {
+  noStroke();
+  fill(70, 80, 95);
+  rect(-18, -6, 36, 12);
+  stroke(60, 200, 200);
+  strokeWeight(1.4);
+  line(-17, -2, 17, -2);
+}
+
+function drawCrashCockpitChunk() {
+  noStroke();
+  fill(80, 220, 160);
+  ellipse(0, 0, 14, 10);
+  fill(220, 255, 230, 200);
+  ellipse(-2, -2, 5, 3);
+}
+
+function drawCrashLeftFinChunk() {
+  noStroke();
+  fill(50, 60, 75);
+  triangle(2, -9, -8, 9, 2, 5);
+  stroke(70, 220, 200);
+  strokeWeight(1.4);
+  line(2, -9, -8, 9);
+}
+
+function drawCrashRightFinChunk() {
+  noStroke();
+  fill(50, 60, 75);
+  triangle(-2, -9, 8, 9, -2, 5);
+  stroke(70, 220, 200);
+  strokeWeight(1.4);
+  line(-2, -9, 8, 9);
+}
+
+function drawCrashEngineBellChunk() {
+  noStroke();
+  fill(40, 45, 55);
+  rect(-6, -3, 12, 4);
+  fill(20, 25, 30);
+  rect(-4, 1, 8, 3);
+}
+
+function drawCrashAntennaChunk() {
+  stroke(150, 170, 185);
+  strokeWeight(1);
+  line(0, -5, 0, 3);
+  noStroke();
+  fill(255, 90, 90);
+  circle(0, -6, 3);
+}
+
+function updateCrashParticles(timeScale = 1) {
+  for (let i = crashParticles.length - 1; i >= 0; i--) {
+    let p = crashParticles[i];
+    switch (p.kind) {
+      case "flash":
+        p.life -= 0.09 * timeScale;
+        break;
+      case "shockwave":
+        p.radius += (p.maxRadius - p.radius) * 0.14 * timeScale;
+        p.life -= 0.035 * timeScale;
+        break;
+      case "debris":
+      case "part":
+        p.x += p.vx * timeScale;
+        p.y += p.vy * timeScale;
+        p.vy += 0.14 * timeScale;        // gravity
+        p.vx *= 0.99;
+        p.vy *= 0.99;
+        p.rot += p.rotSpeed * timeScale;
+        p.life -= p.decay * timeScale;
+        break;
+      case "spark":
+        p.x += p.vx * timeScale;
+        p.y += p.vy * timeScale;
+        p.vy += 0.1 * timeScale;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.life -= p.decay * timeScale;
+        break;
+      case "smoke":
+        p.x += p.vx * timeScale;
+        p.y += p.vy * timeScale;
+        p.vx *= 0.96;
+        p.vy *= 0.97;
+        p.size += 0.4 * timeScale;       // smoke billows outward
+        p.life -= p.decay * timeScale;
+        break;
+    }
+    if (p.life <= 0) crashParticles.splice(i, 1);
+  }
+}
+
+function drawCrashParticles() {
+  push();
+  noStroke();
+
+  // Smoke first so debris and sparks sit on top of it.
+  for (let p of crashParticles) {
+    if (p.kind !== "smoke") continue;
+    fill(60, 60, 65, 160 * p.life);
+    circle(p.x, p.y, p.size);
+  }
+
+  // Tumbling ship components — uses canvas globalAlpha so each chunk's draw
+  // routine can stay simple (no need to thread alpha through every fill/stroke).
+  for (let p of crashParticles) {
+    if (p.kind !== "part") continue;
+    drawingContext.globalAlpha = constrain(p.life, 0, 1);
+    push();
+    translate(p.x, p.y);
+    scale(p.scale);
+    rotate(p.rot);
+    p.draw();
+    pop();
+  }
+  drawingContext.globalAlpha = 1;
+
+  // Small generic chunks of confetti around the parts.
+  for (let p of crashParticles) {
+    if (p.kind !== "debris") continue;
+    let a = 230 * p.life;
+    if (p.hull) fill(85, 95, 110, a);
+    else        fill(120, 200, 220, a);
+    push();
+    translate(p.x, p.y);
+    rotate(p.rot);
+    rect(-p.size / 2, -p.size / 2, p.size, p.size);
+    pop();
+  }
+
+  // Shockwave ring + flash + embers all add together for a hot pop.
+  push();
+  blendMode(ADD);
+
+  for (let p of crashParticles) {
+    if (p.kind !== "shockwave") continue;
+    noFill();
+    stroke(255, 200, 80, 220 * p.life);
+    strokeWeight(3 * p.life);
+    circle(p.x, p.y, p.radius * 2);
+  }
+  noStroke();
+
+  for (let p of crashParticles) {
+    if (p.kind !== "spark") continue;
+    fill(255, floor(180 * p.life), 60, 255 * p.life);
+    circle(p.x, p.y, p.size);
+  }
+
+  for (let p of crashParticles) {
+    if (p.kind !== "flash") continue;
+    fill(255, 250, 220, 240 * p.life);
+    circle(p.x, p.y, 90 * (1.3 - p.life));
+  }
+
+  pop();
+  pop();
+}
+
 function updateDiscoveries() {
   for (let planet of planets) {
     if (planet.discovered || planet.isSun) continue;
@@ -1043,9 +1364,18 @@ function showEvent(message, duration = 2800) {
 
 function resetView() {
   view.scale = 1;
-  view.rotation = 0;
   view.focusX = lander ? lander.pos.x : 0;
   view.focusY = lander ? lander.pos.y : 0;
+  // Align the camera so gravity from the ship's nearest planet points
+  // screen-down. A spawn on the side of a planet would otherwise leave the
+  // player flying sideways relative to gravity until they manually roll with Q/E.
+  if (lander && lander.nearestPlanet) {
+    let ax = lander.pos.x - lander.nearestPlanet.center.x;
+    let ay = lander.pos.y - lander.nearestPlanet.center.y;
+    view.rotation = -90 - atan2(ay, ax);
+  } else {
+    view.rotation = 0;
+  }
 }
 
 function updateView() {
@@ -1122,6 +1452,26 @@ function getSurfaceDistance(position, planet) {
   }
 
   return max(0, centerDistance - planet.baseRadius);
+}
+
+// Terrain height (radius from planet center) at a given angle. Used by
+// falling samples to know when they've touched the ground.
+function getSurfaceRadius(planet, angle) {
+  let landscape = planet.landscape;
+  if (!landscape || landscape.length < 2) return planet.baseRadius;
+  if (angle < 0) angle += 360;
+  for (let i = 0; i < landscape.length - 1; i++) {
+    let cur = landscape[i];
+    let next = landscape[i + 1];
+    let curA = cur.angle;
+    let nextA = next.angle < curA ? next.angle + 360 : next.angle;
+    let adjA = angle < curA ? angle + 360 : angle;
+    if (adjA >= curA && adjA <= nextA) {
+      let f = (adjA - curA) / (nextA - curA);
+      return lerp(cur.r, next.r, f);
+    }
+  }
+  return planet.baseRadius;
 }
 
 /*********************************************************
@@ -1389,6 +1739,7 @@ function checkCollisions(lander, planets) {
           tryDeliver();
           return false
         } else {
+          spawnCrashEffect(lander.pos.x, lander.pos.y, lander.vel.x, lander.vel.y, lander.rotation, lander.scale);
           lander.crash();
           gameState = GAME_STATES.CRASHED;
         }
@@ -1396,7 +1747,7 @@ function checkCollisions(lander, planets) {
       }
     }
   }
-  
+
   // Also check for collision with planet's basic radius
   let distToCenter = dist(
     lander.pos.x,
@@ -1404,8 +1755,9 @@ function checkCollisions(lander, planets) {
     closestPlanet.center.x,
     closestPlanet.center.y
   );
-  
+
   if (distToCenter <= closestPlanet.baseRadius*.9 + lander.radius) {
+    spawnCrashEffect(lander.pos.x, lander.pos.y, lander.vel.x, lander.vel.y, lander.rotation, lander.scale);
     lander.crash();
     gameState = GAME_STATES.CRASHED;
     return true;

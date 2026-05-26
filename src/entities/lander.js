@@ -46,9 +46,6 @@ class Lander {
     this.trajectoryLastFrame = -Infinity;
     this.trajectoryLastInputKey = "";
     this.beamDust = [];
-    this.image = shipImage;
-    this.imagethrust = shipFlameImage;
-    this.imagethrust2 = shipFlameImage2;
 
     this.reset();
   }
@@ -60,8 +57,10 @@ class Lander {
     this.rotation = this.targetRotation = -90;
     this.scale = 0.8;
     this.active = true;
+    this.crashed = false;
     this.thrusting = 0;
     this.fuel = this.maxFuel;
+    this.heat = 0;
     this.landingPlanet = null;
     this.landingOffset = null;
     this.inWater = false;
@@ -79,12 +78,10 @@ class Lander {
   }
   crash() {
     this.active = false;
+    this.crashed = true;
     this.thrusting = 0;
     this.abducting = false;
-    
-    // Optional: Add explosion particles or other crash effects here
-    // You could emit an event or set a flag for the main game to handle visual effects
-    
+
     console.log("Lander crashed!");
   }
 
@@ -437,56 +434,27 @@ class Lander {
     if (this.fuel < 0) this.fuel = 0;
     this.thrustLevel = this.thrusting;
   }
-   flip = false;
   render(timeScale = 1) {
-    push();
-    translate(this.pos.x, this.pos.y);
-    scale(this.scale);
-    rotate(this.rotation);
-    let sizeDiv = 5;
-    // Body
-    stroke(255);
-    noFill();
-    if (this.thrusting > 0 && this.active && this.fuel > 0) {
+    // Hide the hull once the ship is destroyed — the crash particle system in
+    // sketch.js draws debris/smoke at the impact point instead.
+    if (!this.crashed) {
+      push();
+      translate(this.pos.x, this.pos.y);
+      scale(this.scale);
+      rotate(this.rotation);
 
-      if(frameCount % 3 == 0){
-        this.flip = !this.flip;
+      // Thrust flame is drawn first so the hull sits on top of it.
+      if (this.thrusting > 0 && this.active && this.fuel > 0) {
+        this.drawThrustFlame();
       }
-      if(this.flip){
-        image(this.imagethrust,  -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
-      }
-      else{
-        image(this.imagethrust2,  -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
-      }
+      this.drawShipBody();
 
-      
-    } else{
-    // beginShape();
-    // vertex(-10, -5);
-    // vertex(10, -5);
-    // vertex(10, 10);
-    // vertex(-10, 10);
-    // endShape(CLOSE);
-    
-    image(this.image, -350/sizeDiv, -700/sizeDiv, 740.963397/sizeDiv, 1000/sizeDiv);
+      pop();
     }
-    // Landing legs
-    // line(-10, 10, -15, 15);
-    // line(10, 10, 15, 15);
-
-    // Thrust animation
-
-
-    noStroke();
-    fill(255, 255, 0, 50);
-   // ellipse(0, 5, 100, 100);
-
-    pop();
-    // Tractor beam runs in world space (not the ship's local frame),
-    // so call after the local push/pop. Otherwise scale + rotation distort it.
-    if (this.abducting) {
-      this.abduct();
-    }
+    // Tractor beam runs in world space (not the ship's local frame), so call
+    // after the local push/pop. Runs every frame — even when the beam is off —
+    // so released samples can fall instead of staying stuck in "carried".
+    this.abduct();
     // Trajectory is drawn on the minimap only (see drawMinimap).
   }
 
@@ -499,140 +467,285 @@ class Lander {
     );
   }
 
-  abduct() {
-    if (!this.nearestPlanet) return;
-    let planet = this.nearestPlanet;
+  // Alien-rocket hull, drawn in local space (nose at -y, exhaust at +y).
+  drawShipBody() {
+    // Heat ratio 0..1 — lerps every painted color toward red-hot, and adds a
+    // pulsing aura behind the hull once the metal starts to glow.
+    let h = constrain((this.heat || 0) / (DEBUG.heatMax || 100), 0, 1);
+    // Use a steeper curve so the tint is subtle until the player is in
+    // genuine danger, then ramps fast as the hull approaches failure.
+    let hVisible = pow(h, 1.4);
+    let critical = h > 0.7;
+    let pulse = critical ? 0.6 + 0.4 * sin(frameCount * 18) : 1;
 
-    // Beam fires straight down the ship's local axis (opposite of thrust),
-    // so the player must orient the ship above whatever they want to collect.
-    let nx = -sin(this.rotation);
-    let ny = cos(this.rotation);
+    // Red-hot aura behind the hull when heat is significant.
+    if (h > 0.15) {
+      push();
+      blendMode(ADD);
+      noStroke();
+      let auraA = 110 * hVisible * pulse;
+      fill(255, 80, 30, auraA);
+      ellipse(0, -6, 60 + 20 * hVisible, 64 + 22 * hVisible);
+      fill(255, 200, 100, auraA * 0.7);
+      ellipse(0, -6, 36 + 12 * hVisible, 40 + 14 * hVisible);
+      pop();
+    }
 
-    let beamLen = rayHitsTerrain(this.pos, nx, ny, this.beamRange, planet);
-    let endX = this.pos.x + nx * beamLen;
-    let endY = this.pos.y + ny * beamLen;
+    noStroke();
 
-    // Perpendicular axis for the beam's wide end.
-    let px = -ny;
-    let py = nx;
-    let halfWidth = this.beamWidth;
-    let leftX = endX + px * halfWidth;
-    let leftY = endY + py * halfWidth;
-    let rightX = endX - px * halfWidth;
-    let rightY = endY - py * halfWidth;
+    // Outer hull silhouette — tapered nose to a wide engine block.
+    fill(lerp(70, 255 * pulse, hVisible),
+         lerp(80, 50, hVisible),
+         lerp(95, 30, hVisible));
+    beginShape();
+    vertex(0, -30);
+    vertex(-8, -23);
+    vertex(-14, -12);
+    vertex(-18, 0);
+    vertex(-18, 14);
+    vertex(18, 14);
+    vertex(18, 0);
+    vertex(14, -12);
+    vertex(8, -23);
+    endShape(CLOSE);
 
-    let t = frameCount * 0.08;
+    // Inner highlight panel — gives the hull some depth without a gradient.
+    fill(lerp(120, 255 * pulse, hVisible),
+         lerp(200, 100, hVisible),
+         lerp(220, 30, hVisible));
+    beginShape();
+    vertex(0, -25);
+    vertex(-5, -15);
+    vertex(-6, 0);
+    vertex(-6, 10);
+    vertex(6, 10);
+    vertex(6, 0);
+    vertex(5, -15);
+    endShape(CLOSE);
+
+    // Cockpit dome — glowing alien green, shifts orange as it heats.
+    fill(lerp(80, 255 * pulse, hVisible),
+         lerp(220, 80, hVisible),
+         lerp(160, 30, hVisible),
+         230);
+    ellipse(0, -13, 14, 10);
+    fill(220, 255 - 100 * hVisible, 230 - 150 * hVisible, 200);
+    ellipse(-2, -15, 5, 3); // shine
+
+    // Trim band across the belly.
+    stroke(lerp(60, 255 * pulse, hVisible),
+           lerp(200, 80, hVisible),
+           lerp(200, 30, hVisible));
+    strokeWeight(1.4);
+    line(-17, 6, 17, 6);
+    noStroke();
+
+    // Swept side fins.
+    fill(lerp(50, 255 * pulse, hVisible),
+         lerp(60, 60, hVisible),
+         lerp(75, 30, hVisible));
+    triangle(-18, 0, -28, 18, -18, 14);
+    triangle(18, 0, 28, 18, 18, 14);
+    stroke(lerp(70, 255 * pulse, hVisible),
+           lerp(220, 100, hVisible),
+           lerp(200, 30, hVisible),
+           220);
+    strokeWeight(1.4);
+    line(-18, 0, -28, 18);
+    line(18, 0, 28, 18);
+    noStroke();
+
+    // Engine bell.
+    fill(lerp(40, 200 * pulse, hVisible),
+         lerp(45, 50, hVisible),
+         lerp(55, 30, hVisible));
+    rect(-6, 14, 12, 4);
+    fill(lerp(20, 150 * pulse, hVisible),
+         lerp(25, 40, hVisible),
+         lerp(30, 20, hVisible));
+    rect(-4, 18, 8, 3);
+
+    // Top antenna with a blinking running light.
+    stroke(150, 170, 185);
+    strokeWeight(1);
+    line(0, -30, 0, -36);
+    noStroke();
+    let blink = 0.5 + 0.5 * sin(frameCount * 6);
+    fill(255, 70 + 80 * blink, 70 + 80 * blink);
+    circle(0, -37, 3);
+  }
+
+  // Pulsing plasma exhaust — drawn in local space below the engine bell.
+  drawThrustFlame() {
+    let flicker = 0.75 + 0.25 * sin(frameCount * 3);
+    let chaos = (noise(frameCount * 0.2) - 0.5) * 4;
+    let len = 26 * flicker;
 
     push();
     blendMode(ADD);
     noStroke();
 
-    // Outer halo cones — stacked, soft, wider than the beam.
-    for (let i = 3; i >= 1; i--) {
-      let widen = 1 + i * 0.35;
-      fill(110, 230, 200, 22);
-      let lwX = endX + px * halfWidth * widen;
-      let lwY = endY + py * halfWidth * widen;
-      let rwX = endX - px * halfWidth * widen;
-      let rwY = endY - py * halfWidth * widen;
-      triangle(this.pos.x, this.pos.y, lwX, lwY, rwX, rwY);
-    }
+    fill(255, 120, 30, 100);
+    triangle(-9, 18, chaos, 18 + len, 9, 18);
 
-    // Core cone.
-    fill(180, 255, 220, 90);
-    triangle(this.pos.x, this.pos.y, leftX, leftY, rightX, rightY);
+    fill(255, 210, 80, 180);
+    triangle(-5, 18, chaos * 0.7, 18 + len * 0.85, 5, 18);
 
-    // Pulsing inner core.
-    let corePulse = 0.6 + 0.4 * sin(t * 60);
-    fill(230, 255, 245, 140 * corePulse);
-    let innerHalf = halfWidth * 0.35;
-    triangle(
-      this.pos.x,
-      this.pos.y,
-      endX + px * innerHalf,
-      endY + py * innerHalf,
-      endX - px * innerHalf,
-      endY - py * innerHalf
-    );
-
-    // Scrolling suction stripes — travel from terrain end toward the ship.
-    let stripeCount = 8;
-    let scroll = (t * 0.25) % 1;
-    strokeWeight(2);
-    for (let i = 0; i < stripeCount; i++) {
-      let phase = (i / stripeCount + scroll) % 1; // 0 at ship, 1 at end
-      let cx = lerp(this.pos.x, endX, phase);
-      let cy = lerp(this.pos.y, endY, phase);
-      let w = halfWidth * phase;
-      let a = 200 * sin(phase * 180);
-      stroke(150, 255, 220, a);
-      line(cx + px * w, cy + py * w, cx - px * w, cy - py * w);
-    }
-    noStroke();
-
-    // Terrain-end splat — stacked oblong glows.
-    push();
-    translate(endX, endY);
-    rotate(atan2(py, px));
-    let splatBreath = 0.9 + 0.1 * sin(t * 40);
-    for (let i = 4; i >= 1; i--) {
-      fill(180, 255, 220, 50);
-      let rx = halfWidth * (0.6 + i * 0.4) * splatBreath;
-      ellipse(0, 0, rx * 2, rx * 0.4);
-    }
-    pop();
-
-    // Dust particles getting funneled up the beam.
-    for (let i = 0; i < 3; i++) {
-      let s = random(-halfWidth * 0.9, halfWidth * 0.9);
-      this.beamDust.push({
-        x: endX + px * s,
-        y: endY + py * s,
-        t: 0,
-        speed: random(0.02, 0.045),
-        off: random(-halfWidth * 0.3, halfWidth * 0.3)
-      });
-    }
-    for (let i = this.beamDust.length - 1; i >= 0; i--) {
-      let d = this.beamDust[i];
-      d.t += d.speed;
-      if (d.t >= 1) { this.beamDust.splice(i, 1); continue; }
-      let remaining = 1 - d.t;
-      let cx = lerp(endX, this.pos.x, d.t);
-      let cy = lerp(endY, this.pos.y, d.t);
-      let lateral = d.off * remaining;
-      let dx2 = cx + px * lateral;
-      let dy2 = cy + py * lateral;
-      fill(220, 255, 235, 220 * remaining);
-      circle(dx2, dy2, 2 + 3 * remaining);
-    }
+    fill(180, 250, 240, 230);
+    triangle(-2.5, 18, chaos * 0.4, 18 + len * 0.55, 2.5, 18);
 
     pop();
+  }
 
-    let A = createVector(this.pos.x, this.pos.y);
-    let B = createVector(leftX, leftY);
-    let C = createVector(rightX, rightY);
+  abduct() {
+    // The beam only grabs samples while the player actively holds space and
+    // the ship is alive/near a planet. When inactive, the loop below still
+    // runs to call drop() on anything currently being carried so it falls
+    // instead of locking to the ship.
+    let beamActive = this.abducting && this.active && !!this.nearestPlanet;
+    let hasRoom = cargo < this.maxCargo;
+    let A, B, C;
 
+    if (beamActive) {
+      let planet = this.nearestPlanet;
+
+      // Beam fires straight down the ship's local axis (opposite of thrust),
+      // so the player must orient the ship above whatever they want to collect.
+      let nx = -sin(this.rotation);
+      let ny = cos(this.rotation);
+
+      let beamLen = rayHitsTerrain(this.pos, nx, ny, this.beamRange, planet);
+      let endX = this.pos.x + nx * beamLen;
+      let endY = this.pos.y + ny * beamLen;
+
+      // Perpendicular axis for the beam's wide end.
+      let px = -ny;
+      let py = nx;
+      let halfWidth = this.beamWidth;
+      let leftX = endX + px * halfWidth;
+      let leftY = endY + py * halfWidth;
+      let rightX = endX - px * halfWidth;
+      let rightY = endY - py * halfWidth;
+
+      let t = frameCount * 0.08;
+
+      push();
+      blendMode(ADD);
+      noStroke();
+
+      // Outer halo cones — stacked, soft, wider than the beam.
+      for (let i = 3; i >= 1; i--) {
+        let widen = 1 + i * 0.35;
+        fill(110, 230, 200, 22);
+        let lwX = endX + px * halfWidth * widen;
+        let lwY = endY + py * halfWidth * widen;
+        let rwX = endX - px * halfWidth * widen;
+        let rwY = endY - py * halfWidth * widen;
+        triangle(this.pos.x, this.pos.y, lwX, lwY, rwX, rwY);
+      }
+
+      // Core cone.
+      fill(180, 255, 220, 90);
+      triangle(this.pos.x, this.pos.y, leftX, leftY, rightX, rightY);
+
+      // Pulsing inner core.
+      let corePulse = 0.6 + 0.4 * sin(t * 60);
+      fill(230, 255, 245, 140 * corePulse);
+      let innerHalf = halfWidth * 0.35;
+      triangle(
+        this.pos.x,
+        this.pos.y,
+        endX + px * innerHalf,
+        endY + py * innerHalf,
+        endX - px * innerHalf,
+        endY - py * innerHalf
+      );
+
+      // Scrolling suction stripes — travel from terrain end toward the ship.
+      let stripeCount = 8;
+      let scroll = (t * 0.25) % 1;
+      strokeWeight(2);
+      for (let i = 0; i < stripeCount; i++) {
+        let phase = (i / stripeCount + scroll) % 1; // 0 at ship, 1 at end
+        let cx = lerp(this.pos.x, endX, phase);
+        let cy = lerp(this.pos.y, endY, phase);
+        let w = halfWidth * phase;
+        let a = 200 * sin(phase * 180);
+        stroke(150, 255, 220, a);
+        line(cx + px * w, cy + py * w, cx - px * w, cy - py * w);
+      }
+      noStroke();
+
+      // Terrain-end splat — stacked oblong glows.
+      push();
+      translate(endX, endY);
+      rotate(atan2(py, px));
+      let splatBreath = 0.9 + 0.1 * sin(t * 40);
+      for (let i = 4; i >= 1; i--) {
+        fill(180, 255, 220, 50);
+        let rx = halfWidth * (0.6 + i * 0.4) * splatBreath;
+        ellipse(0, 0, rx * 2, rx * 0.4);
+      }
+      pop();
+
+      // Dust particles getting funneled up the beam.
+      for (let i = 0; i < 3; i++) {
+        let s = random(-halfWidth * 0.9, halfWidth * 0.9);
+        this.beamDust.push({
+          x: endX + px * s,
+          y: endY + py * s,
+          t: 0,
+          speed: random(0.02, 0.045),
+          off: random(-halfWidth * 0.3, halfWidth * 0.3)
+        });
+      }
+      for (let i = this.beamDust.length - 1; i >= 0; i--) {
+        let d = this.beamDust[i];
+        d.t += d.speed;
+        if (d.t >= 1) { this.beamDust.splice(i, 1); continue; }
+        let remaining = 1 - d.t;
+        let cx = lerp(endX, this.pos.x, d.t);
+        let cy = lerp(endY, this.pos.y, d.t);
+        let lateral = d.off * remaining;
+        let dx2 = cx + px * lateral;
+        let dy2 = cy + py * lateral;
+        fill(220, 255, 235, 220 * remaining);
+        circle(dx2, dy2, 2 + 3 * remaining);
+      }
+
+      pop();
+
+      A = createVector(this.pos.x, this.pos.y);
+      B = createVector(leftX, leftY);
+      C = createVector(rightX, rightY);
+    }
+
+    // Decide each frame whether each loose sample is still in the active beam.
+    // If the beam is off, A/B/C are undefined and every carried item gets a
+    // drop() (which transitions it to "falling" so it actually falls).
+    let canGrab = beamActive && hasRoom;
     for (let cow of cows) {
       if (cow.state === "stowed") continue;
-      let cowPos = createVector(cow.pos.x, cow.pos.y);
-      let close = dist(this.pos.x, this.pos.y, cow.pos.x, cow.pos.y) < 50;
-      if (pointInTriangle(cowPos, A, B, C) || close) {
-        cow.abduct();
-      } else {
-        cow.drop();
+      let inBeam = false;
+      if (canGrab) {
+        let cowPos = createVector(cow.pos.x, cow.pos.y);
+        let close = dist(this.pos.x, this.pos.y, cow.pos.x, cow.pos.y) < 50;
+        inBeam = pointInTriangle(cowPos, A, B, C) || close;
       }
+      if (inBeam) cow.abduct();
+      else cow.drop();
     }
 
     for (let plant of flora) {
       if (plant.state === "growing" || plant.state === "stowed") continue;
-      let plantPos = createVector(plant.pos.x, plant.pos.y);
-      let close = dist(this.pos.x, this.pos.y, plant.pos.x, plant.pos.y) < 50;
-      if (pointInTriangle(plantPos, A, B, C) || close) {
-        plant.abduct();
-      } else {
-        plant.drop();
+      let inBeam = false;
+      if (canGrab) {
+        let plantPos = createVector(plant.pos.x, plant.pos.y);
+        let close = dist(this.pos.x, this.pos.y, plant.pos.x, plant.pos.y) < 50;
+        inBeam = pointInTriangle(plantPos, A, B, C) || close;
       }
+      if (inBeam) plant.abduct();
+      else plant.drop();
     }
   }
 }

@@ -6,7 +6,7 @@ const DEBUG = {
   planetRadiusScale: 4.0,
   planetGravity: 125000000,
   planetSpacing: 14000,
-  orbitSpeedScale: 1.0, // 0 freezes orbits, 1 = baseline random speeds
+  orbitSpeedScale: 0, // 0 freezes orbits, 1 = baseline random speeds
   pullStrength: 0.15,
   cameraMinZoom: 0.7,
   cameraMaxZoom: 2.0,
@@ -23,13 +23,16 @@ const DEBUG = {
   atmosphereInnerBand: 1.0, // multiplier on the opaque inner band thickness
   burnSpeedThreshold: 5,  // speed/frame below this, no burn
   burnIntensity: 0.6,     // particle emission scale
+  heatGain: 0.02,         // hull heat gained per (density * excess speed) per frame
+  heatCool: 0.4,          // hull heat dissipated per frame when not burning
+  heatMax: 100,           // hull explodes when heat reaches this value
   shown: false
 };
 
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 9;
+const DEBUG_VERSION = 11;
 
 function loadDebugFromStorage() {
   try {
@@ -82,6 +85,9 @@ const DEBUG_PARAMS = [
   { key: "atmosphereInnerBand", label: "Atmo Inner Band", min: 0.1,  max: 8,    step: 0.1,   live: true },
   { key: "burnSpeedThreshold",label: "Burn Speed Min",    min: 0,    max: 30,   step: 0.5,   live: true },
   { key: "burnIntensity",     label: "Burn Intensity",    min: 0,    max: 3.0,  step: 0.05,  live: true },
+  { key: "heatGain",          label: "Heat Gain",         min: 0,    max: 0.2,  step: 0.005, live: true },
+  { key: "heatCool",          label: "Heat Cool",         min: 0,    max: 3.0,  step: 0.05,  live: true },
+  { key: "heatMax",           label: "Heat Limit",        min: 20,   max: 400,  step: 5,     live: true },
   { key: "showTrajectory",    label: "Show Trajectory (T)", type: "toggle",                   live: true }
 ];
 
