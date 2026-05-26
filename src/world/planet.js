@@ -7,8 +7,12 @@ class Planet {
     this.baseRadius = baseRadius;
     this.noiseIntensity = noiseIntensity;
     this.numPoints = numPoints;
-    this.strokeColor =color(numPoints, noiseIntensity, baseRadius/density , density/ 10 );
-    this.fillColor = color(numPoints, noiseIntensity, baseRadius/density , density/10 );;
+    // Sandy-granite tone: warm orange with a low brown/gray floor so the
+    // planet reads as desert rock rather than the prior yellow. Texture
+    // variation comes from generateSurfaceTexture() rather than the base
+    // color, so a single tint keeps things consistent.
+    this.strokeColor = color(180, 110, 70);
+    this.fillColor   = color(200, 135, 85);
     this.gravity = density;
    // Add orbital parameters
     if(this.center.x !== sun.x || this.center.y !== sun.y){
@@ -36,10 +40,9 @@ class Planet {
     this.snakeShapes = this.generateSnakeShapes();
     this.alien = new Alien(this.center, baseRadius, this.strokeColor);
     this.surfaceTexture = this.generateSurfaceTexture();
-    // Clouds populate on construction for any planet with atmosphere. Stored
-    // as {angle, altitude, length, thickness, drift} and rendered as soft
-    // ellipses tangent to their orbit.
-    this.clouds = this.hasAtmosphere() ? this.generateClouds() : [];
+    // Clouds are now drawn by the shader pass in clouds.js (a continuous
+    // FBM density field rather than discrete ellipses), so no per-planet
+    // cloud state is needed here.
     // Background ridge silhouette — a second landscape with a different noise
     // seed and slightly larger amplitude. Rendered before the main terrain in
     // an atmospheric-haze color so its peaks read as distant mountains behind
@@ -67,41 +70,6 @@ class Planet {
     }
     points.push({ ...points[0] });
     return points;
-  }
-
-  generateClouds() {
-    let clouds = [];
-    let atmoThickness = this.baseRadius * DEBUG.atmosphereScale;
-
-    // High layer — wispy, far above the peaks, barely drifts. Reads as the
-    // background of the atmosphere.
-    for (let i = 0; i < 10; i++) {
-      clouds.push({
-        layer: "high",
-        angle: random(360),
-        altitude: this.noiseIntensity + atmoThickness * random(0.35, 0.6),
-        length: this.baseRadius * random(0.025, 0.06),
-        thickness: this.baseRadius * random(0.006, 0.014),
-        drift: random(0.004, 0.012) * (random() < 0.5 ? -1 : 1),
-        opacity: 0.55
-      });
-    }
-
-    // Low layer — denser, hugging the peaks, drifts much faster. The speed
-    // contrast vs. the high layer is what sells the depth illusion.
-    for (let i = 0; i < 10; i++) {
-      clouds.push({
-        layer: "low",
-        angle: random(360),
-        altitude: this.noiseIntensity + atmoThickness * random(0.04, 0.18),
-        length: this.baseRadius * random(0.012, 0.03),
-        thickness: this.baseRadius * random(0.004, 0.01),
-        drift: random(0.04, 0.08) * (random() < 0.5 ? -1 : 1),
-        opacity: 1.0
-      });
-    }
-
-    return clouds;
   }
 
   generateSurfaceTexture() {
@@ -216,16 +184,10 @@ class Planet {
     return createVector(nextX - this.center.x, nextY - this.center.y);
   }
 
-  advanceClouds(timeScale) {
-    if (!this.hasAtmosphere() || !this.clouds) return;
-    for (let c of this.clouds) c.angle += c.drift * timeScale;
-  }
-
   update(timeScale = 1) {
     if (this.isSun) {
       this.alien.update(timeScale);
       this.updateLandscapePoints();
-      this.advanceClouds(timeScale);
       return;
     }
 
@@ -250,7 +212,6 @@ class Planet {
       this.center.y += this.vel.y * timeScale;
       this.alien.update(timeScale);
       this.updateLandscapePoints();
-      this.advanceClouds(timeScale);
       return;
     }
 
@@ -262,7 +223,6 @@ class Planet {
     this.updateOrbitPosition();
     // Update landscape points relative to new center
     this.updateLandscapePoints();
-    this.advanceClouds(timeScale);
   }
   updateLandscapePoints() {
     for (let point of this.landscape) {
@@ -537,37 +497,9 @@ class Planet {
       }
     }
 
-    // Cloud layers — drawn outside the terrain clip so they sit above the
-    // surface and can extend past the silhouette. Render the high (far) layer
-    // first so the low (near) layer overlaps it; combined with the ~6× drift
-    // speed gap, the relative motion reads as parallax depth.
-    if (this.hasAtmosphere() && this.clouds && this.clouds.length > 0) {
-      push();
-      noStroke();
-      // Two passes so back-to-front order is enforced regardless of array order.
-      for (let pass = 0; pass < 2; pass++) {
-        let wantLayer = pass === 0 ? "high" : "low";
-        for (let c of this.clouds) {
-          if (c.layer !== wantLayer) continue;
-          let r = this.baseRadius + c.altitude;
-          let cx = this.center.x + r * cos(c.angle);
-          let cy = this.center.y + r * sin(c.angle);
-          push();
-          translate(cx, cy);
-          // Tangent-aligned so clouds streak along their drift direction.
-          rotate(c.angle + 90);
-          let a = c.opacity;
-          fill(255, 255, 255, 70 * a);
-          ellipse(0, 0, c.length * 1.4, c.thickness * 1.6);
-          fill(255, 255, 255, 110 * a);
-          ellipse(0, 0, c.length * 1.1, c.thickness * 1.2);
-          fill(255, 255, 255, 180 * a);
-          ellipse(0, 0, c.length * 0.8, c.thickness * 0.8);
-          pop();
-        }
-      }
-      pop();
-    }
+    // Cloud layer is rendered by the shader pass in clouds.js (drawn in
+    // screen space after the camera pop so the FBM density samples line up
+    // with the rest of the scene via the same camera-inverse transform).
 
     // Draw snake shapes
     push();

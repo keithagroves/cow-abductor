@@ -51,13 +51,13 @@ const PLANET_NAMES = [
  *                   P5 LIFE CYCLE
  *********************************************************/
 function preload() {
-  cowImage = loadImage("darkCow.png");
-  alienImage = loadImage("alien.png");
-  alienGroundImage = loadImage("unnamed.png");
-  shipImage = loadImage("ship.png");
-  shipFlameImage = loadImage("shipflame.png");
-  shipFlameImage2 = loadImage("flame2.png");
-  backgroundMusic = loadSound("leaving-for-good.mp3");
+  cowImage = loadImage("assets/images/darkCow.png");
+  alienImage = loadImage("assets/images/alien.png");
+  alienGroundImage = loadImage("assets/images/unnamed.png");
+  shipImage = loadImage("assets/images/ship.png");
+  shipFlameImage = loadImage("assets/images/shipflame.png");
+  shipFlameImage2 = loadImage("assets/images/flame2.png");
+  backgroundMusic = loadSound("assets/audio/leaving-for-good.mp3");
 }
 
 
@@ -121,12 +121,25 @@ function setup() {
     getAudioContext().suspend();
   }
 
-  // Initialize starfield
-  for (let i = 0; i < 100; i++) {
+  // Initialize starfield. Each star gets a parallax depth (0=far/static,
+  // 1=world-locked) so the field reads as having real distance when the
+  // camera moves. Closer stars are bigger and brighter; color comes from
+  // a coarse blackbody-style palette biased toward white.
+  // Tile is larger than the screen so the rotated viewport stays inside.
+  let tileW = width * 1.5;
+  let tileH = height * 1.5;
+  for (let i = 0; i < 300; i++) {
+    let depth = pow(random(), 1.8);            // bias toward far/small
+    let parallax = lerp(0.04, 0.45, depth);
+    let size = lerp(0.4, 2.2, depth);
+    let baseBrightness = lerp(0.35, 1.0, depth);
     stars.push({
-      x: random(width),
-      y: random(height),
-      brightness: random(100, 500),
+      x: random(-tileW / 2, tileW / 2),
+      y: random(-tileH / 2, tileH / 2),
+      parallax,
+      size,
+      brightness: baseBrightness,
+      color: starTemperatureColor(random()),
     });
   }
   loadDebugFromStorage();
@@ -134,6 +147,7 @@ function setup() {
   resetGame();
   setupDebugPanel();
   initAtmosphere();
+  initClouds();
 }
 
 function buildWorld() {
@@ -391,6 +405,14 @@ function draw() {
     updateView();
   }
 
+  // Atmosphere glow goes down first (ADD on the starfield), then clouds
+  // BLEND on top of it. Both are behind the planet — the planet's surface
+  // covers them where they overlap, so only the limb portion of each
+  // shows. Order matters: clouds on top of atmosphere keeps the cloud
+  // color from being washed out by the additive limb glow.
+  drawAtmosphere();
+  drawClouds();
+
   push();
   // Camera transform: rotate + zoom around the focal point (lander), so
   // pressing Q/E rolls the world view without sliding the ship off-screen.
@@ -423,8 +445,6 @@ function draw() {
   updateAndDrawLasers(timeScale);
 
   pop();
-
-  drawAtmosphere();
 
   pollInput(timeScale);
   if (gameState !== GAME_STATES.WAITING) {
@@ -578,11 +598,24 @@ function initializePlants() {
     if (planet.isSun) continue;
     let landablePoints = planet.landscape.filter((p) => p.landable);
     if (landablePoints.length === 0) continue;
-    for (let i = 0; i < 5; i++) {
-      let point = random(landablePoints);
-      flora.push(new Plant(planet, point.angle, point.r + 12));
+    let angleStep = 360 / planet.numPoints;
+
+    // Pack a dense grove at every landable grid point — 2 or 3 trees per
+    // point with sub-grid jitter so they form a field rather than a row.
+    for (let lp of landablePoints) {
+      let count = floor(random(2, 4));
+      for (let i = 0; i < count; i++) {
+        let angle = lp.angle + (random() - 0.5) * angleStep * 0.9;
+        let radius = lp.r + 10 + random(-2, 5);
+        let plant = new Plant(planet, angle, radius);
+        plant.scale = 0.55 + random() * 0.7;
+        flora.push(plant);
+      }
     }
   }
+  // Render small/background trees first, big foreground trees last — gives
+  // the grove a cheap parallax depth without sorting per frame.
+  flora.sort((a, b) => a.scale - b.scale);
 }
 
 /*********************************************************
@@ -972,9 +1005,9 @@ function updateAndDrawLasers(timeScaleLocal = 1) {
 
     noStroke();
     fill(255, 120, 220, 200 * life);
-    circle(ex, ey, 22 * life);
-    fill(255, 230, 250, 230 * life);
     circle(ex, ey, 9 * life);
+    fill(255, 230, 250, 230 * life);
+    circle(ex, ey, 4 * life);
   }
   pop();
 }
@@ -1094,50 +1127,204 @@ function getSurfaceDistance(position, planet) {
 /*********************************************************
  *                   DRAW HELPERS
  *********************************************************/
-let constellations = [];
+// Active constellation has a sine-shaped life envelope (fade in, hold, fade out),
+// then we pick a new one. Anchors are restricted to far/low-parallax stars so the
+// group drifts together (no tile-wrap tearing mid-shine). Edges are an Euclidean
+// MST over the chosen stars plus a couple of short non-crossing extras to give
+// the figure some triangles instead of a single zigzag polyline.
+let constellation = { nodes: [], edges: [], age: 0, lifespan: 240 };
 
-function drawStarField() {
-  // Just a guard in case constellations gets huge
+function constellationCcw(p, q, r) {
+  return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+}
 
+// Proper segment intersection — returns true only when AB and CD cross
+// strictly in their interiors (shared endpoints don't count as a crossing).
+function constellationSegmentsCross(ai, bi, ci, di, positions) {
+  if (ai === ci || ai === di || bi === ci || bi === di) return false;
+  let a = positions[ai], b = positions[bi], c = positions[ci], d = positions[di];
+  let d1 = constellationCcw(a, b, c);
+  let d2 = constellationCcw(a, b, d);
+  let d3 = constellationCcw(c, d, a);
+  let d4 = constellationCcw(c, d, b);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
 
-  // Every 10 frames, pick a random star from stars[]
-  if (frameCount % 100 === 0) {
-    // use floor() or int() to be safe if random() is fractional
-    let r = floor(random(stars.length));
-    constellations = [stars[r]];
-    for(let star of stars){
-      if(star != stars[r]){
-        let distToStar = dist(star.x, star.y, stars[r].x, stars[r].y);
-        if(distToStar < 100){
-          constellations.push(star);
+// Try to build a small, tight constellation rooted at a far-star anchor.
+// Returns { nodes, edges } or null if no good cluster was found.
+function pickConstellation(positions) {
+  const MAX_PARALLAX = 0.12;
+  const CLUSTER_RADIUS = 70;   // tighter than before so groups feel local
+  const MAX_NODES = 6;         // small enough to read as a figure
+  const MIN_NODES = 4;
+  const EXTRA_EDGES = 2;       // triangle-forming edges added after MST
+
+  let candidates = [];
+  for (let i = 0; i < stars.length; i++) {
+    if (stars[i].parallax <= MAX_PARALLAX) candidates.push(i);
+  }
+  if (candidates.length < MIN_NODES) return null;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let anchor = candidates[floor(random(candidates.length))];
+    let ap = positions[anchor];
+    let near = [];
+    for (let i of candidates) {
+      if (i === anchor) continue;
+      let d = dist(positions[i].x, positions[i].y, ap.x, ap.y);
+      if (d < CLUSTER_RADIUS) near.push({ i, d });
+    }
+    if (near.length < MIN_NODES - 1) continue;
+    near.sort((a, b) => a.d - b.d);
+    let nodes = [anchor, ...near.slice(0, MAX_NODES - 1).map((n) => n.i)];
+
+    // Prim's MST. Always planar in 2D for Euclidean weights, so no crossings.
+    let inTree = new Set([nodes[0]]);
+    let edges = [];
+    while (inTree.size < nodes.length) {
+      let best = null;
+      for (let a of inTree) {
+        let ap2 = positions[a];
+        for (let b of nodes) {
+          if (inTree.has(b)) continue;
+          let d = dist(ap2.x, ap2.y, positions[b].x, positions[b].y);
+          if (!best || d < best.d) best = { a, b, d };
         }
       }
+      if (!best) break;
+      edges.push([best.a, best.b]);
+      inTree.add(best.b);
     }
+
+    // Try to add a few short non-MST edges that don't cross existing edges.
+    // This is what turns the tree into a recognizable figure with triangles.
+    let extras = [];
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        let a = nodes[i], b = nodes[j];
+        let exists = edges.some(
+          ([x, y]) => (x === a && y === b) || (x === b && y === a)
+        );
+        if (exists) continue;
+        extras.push({
+          a, b,
+          d: dist(positions[a].x, positions[a].y, positions[b].x, positions[b].y),
+        });
+      }
+    }
+    extras.sort((x, y) => x.d - y.d);
+
+    let added = 0;
+    for (let e of extras) {
+      if (added >= EXTRA_EDGES) break;
+      let crosses = edges.some(([x, y]) =>
+        constellationSegmentsCross(e.a, e.b, x, y, positions)
+      );
+      if (!crosses) {
+        edges.push([e.a, e.b]);
+        added++;
+      }
+    }
+
+    return { nodes, edges };
+  }
+  return null;
+}
+
+// Coarse blackbody-style gradient. t in [0,1]: cool red → yellow → white → blue.
+// Bias squishes most stars toward white with tinted accents at the extremes.
+function starTemperatureColor(t) {
+  let stops = [
+    [255, 170, 120], // ~3000K
+    [255, 215, 170], // ~4500K
+    [255, 240, 220], // ~6000K
+    [240, 245, 255], // ~7500K
+    [200, 220, 255], // ~10000K
+  ];
+  let bias = constrain(0.5 + (t - 0.5) * 0.6, 0, 1);
+  let f = bias * (stops.length - 1);
+  let i = floor(f);
+  let frac = f - i;
+  let a = stops[i];
+  let b = stops[min(i + 1, stops.length - 1)];
+  return [
+    lerp(a[0], b[0], frac),
+    lerp(a[1], b[1], frac),
+    lerp(a[2], b[2], frac),
+  ];
+}
+
+function drawStarField() {
+  // Tile size must match init so wrap is seamless.
+  let tileW = width * 1.5;
+  let tileH = height * 1.5;
+  let cx = view.focusX;
+  let cy = view.focusY;
+
+  push();
+  // Stars rotate with the world view so Q/E roll feels consistent.
+  translate(width / 2, height / 2);
+  rotate(view.rotation);
+
+  // Resolve each star's screen position once so the constellation pass can reuse it.
+  let positions = new Array(stars.length);
+  for (let i = 0; i < stars.length; i++) {
+    let s = stars[i];
+    let px = s.x - cx * s.parallax;
+    let py = s.y - cy * s.parallax;
+    let sx = ((px + tileW / 2) % tileW + tileW) % tileW - tileW / 2;
+    let sy = ((py + tileH / 2) % tileH + tileH) % tileH - tileH / 2;
+    positions[i] = { x: sx, y: sy };
   }
 
-  // Draw all stars as points
-  strokeWeight(1);
-  for (let star of stars) {
-    stroke(star.brightness);
-    point(star.x, star.y);
+  // Advance the active constellation and pick a fresh one when it expires.
+  constellation.age++;
+  if (constellation.age >= constellation.lifespan) {
+    let picked = pickConstellation(positions);
+    constellation = {
+      nodes: picked ? picked.nodes : [],
+      edges: picked ? picked.edges : [],
+      age: 0,
+      lifespan: floor(random(220, 380)),
+    };
   }
 
-  // Now draw a "constellation line" connecting the stars in constellations[]
-  stroke(255, 255,255, 100 - frameCount/10 % 255);
-  noFill();
-  strokeWeight(2);
-  if(frameCount/10 % 255 > 250){
-    if (constellations.length >= 3) {
-      constellations = [];
+  // Sine envelope: 0 → 1 (mid-life) → 0. Drives line alpha + per-star shine
+  // so the figure pulses as a unit.
+  let envelope = max(0, sin((constellation.age / constellation.lifespan) * 180));
+  let highlighted = new Set(constellation.nodes);
+
+  // Render every star; brighten + enlarge the highlighted ones with the envelope.
+  for (let i = 0; i < stars.length; i++) {
+    let s = stars[i];
+    let p = positions[i];
+    let isHi = highlighted.has(i);
+    let mult = isHi ? 1 + envelope * 2.0 : 1;
+    let r = min(255, s.color[0] * s.brightness * mult);
+    let g = min(255, s.color[1] * s.brightness * mult);
+    let b = min(255, s.color[2] * s.brightness * mult);
+    stroke(r, g, b);
+    strokeWeight(s.size * (isHi ? 1 + envelope * 1.2 : 1));
+    point(p.x, p.y);
+  }
+
+  // Per-edge lines (not a polyline) so MST + triangle edges all render correctly.
+  // Soft wide glow underneath, crisp core on top — both modulated by the envelope.
+  if (constellation.edges.length > 0 && envelope > 0.02) {
+    stroke(180, 210, 255, envelope * 50);
+    strokeWeight(4);
+    for (let [a, b] of constellation.edges) {
+      let pa = positions[a], pb = positions[b];
+      line(pa.x, pa.y, pb.x, pb.y);
+    }
+    stroke(255, 255, 255, envelope * 170);
+    strokeWeight(1.2);
+    for (let [a, b] of constellation.edges) {
+      let pa = positions[a], pb = positions[b];
+      line(pa.x, pa.y, pb.x, pb.y);
     }
   }
-  beginShape();
-  for (let cstar of constellations) {
-    if (cstar) {
-      vertex(cstar.x, cstar.y);
-    }
-  }
-  endShape();
+  pop();
 }
 function checkCollisions(lander, planets) {
   if (!lander.active) {
