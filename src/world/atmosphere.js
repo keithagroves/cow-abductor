@@ -1,9 +1,12 @@
 // Per-planet atmosphere shader. A deliberately simple 2D model: for each
 // screen pixel we find the planet it falls over (in world space, via the
-// camera transform from sketch.js) and draw a single soft glow band in the
-// slab between baseRadius and the outer edge — lit blue on the day side, warm
-// at the sunset terminator, faint on the night side. No raymarching or
-// physical scattering; just one band shaded by the sun direction.
+// camera transform from sketch.js) and shade the slab between baseRadius and
+// the outer edge. The glow lives in a Gaussian band floating at altitude
+// BAND_CENTER, so it reads as a bright arc — part of the big circle girdling
+// the planet — that the ship flies up through and leaves floating in black
+// space as it climbs. The lit band reads blue; warm orange appears only at the
+// sunset terminator. No raymarching or physical scattering; just a floating
+// band shaded by the sun direction.
 
 const ATMO_MAX_PLANETS = 10;
 
@@ -39,16 +42,17 @@ uniform vec3 u_atmoColor[MAX_PLANETS];
 uniform vec2 u_sunPos;
 uniform float u_time;
 
-// One soft glow band floating in the atmosphere — that's the whole model.
-// BAND_CENTER is its altitude (0 = surface, 1 = outer edge), BAND_WIDTH its
-// thickness. A Gaussian fades it smoothly to ~0 at both ends so there are no
-// hard layer edges, and because it floats above the surface the ship sweeps
-// past it like a halo. The band is lit by the sun with a soft day/night, a
-// warm sunset at the terminator, and a faint (never black) night side.
-const float BAND_CENTER = 0.40;
-const float BAND_WIDTH  = 0.28;
-const float BRIGHTNESS  = 1.7;
-const float SUNSET_K    = 0.9;   // warm terminator glow strength
+// Aerial-perspective limb model (the Shuttle-photo look): the atmosphere is
+// densest at the surface and fades into black space with altitude, and its
+// color is stratified by altitude — warm orange low down, grading to the
+// planet's blue higher up. Seen edge-on at the limb this reads as the classic
+// dark-orange → blue → black banding.
+const float BAND_CENTER = 0.50;  // altitude of the glowing band (0=surface,1=top)
+const float BAND_WIDTH  = 0.22;  // band thickness — the arc you fly up through
+const vec3  WARM_COLOR  = vec3(1.0, 0.5, 0.22); // sunset-rim orange
+const float BRIGHTNESS  = 1.9;
+const float SUNSET_K    = 0.8;   // sunset orange strength at the terminator
+const float HAZE_K      = 0.18;  // slight paleness of the band
 const float NIGHT_FLOOR = 0.12;  // dark side dims to this, never to black
 
 void main() {
@@ -75,8 +79,12 @@ void main() {
     float dist = length(d);
     if (dist >= ra || dist <= r) continue;
 
-    // Altitude 0..1, then the smooth Gaussian glow band.
+    // Altitude 0 (surface) .. 1 (outer edge).
     float h = (dist - r) / max(ra - r, 0.0001);
+    // A glowing band floating at altitude BAND_CENTER, fading to ~0 both above
+    // and below. It reads as a bright arc — part of the huge circle girdling
+    // the planet — that you fly up through; climb past it and the arc floats
+    // off into the black space below.
     float band = exp(-pow((h - BAND_CENTER) / BAND_WIDTH, 2.0));
 
     // Sun direction, slowly rotated so the terminator drifts (cosmetic day
@@ -90,13 +98,15 @@ void main() {
 
     // One smoothstep across the terminator → soft day/night, no abrupt line.
     float day = smoothstep(-0.25, 0.3, sunDot);
-    // Warm glow that peaks right at the terminator, on the lit side only.
-    float sunset = exp(-sunDot * sunDot * 8.0) * day;
+    // Warmth that peaks right at the terminator, on the lit side only.
+    float sunset = exp(-sunDot * sunDot * 7.0) * day;
 
-    // Per-planet blue sky on the lit side fading to a faint same-hue night
-    // side, plus the orange sunset added at the terminator.
-    vec3 col = mix(u_atmoColor[i] * NIGHT_FLOOR, u_atmoColor[i], day)
-             + vec3(1.0, 0.5, 0.25) * (sunset * SUNSET_K);
+    // Blue band (slightly pale); warm orange only at the sunset terminator.
+    vec3 skyCol = mix(u_atmoColor[i], vec3(1.0), HAZE_K);
+    vec3 litColor = mix(skyCol, WARM_COLOR, clamp(sunset * SUNSET_K, 0.0, 1.0));
+
+    // Day side is the lit band; night side keeps a faint same-hue glow.
+    vec3 col = mix(u_atmoColor[i] * NIGHT_FLOOR, litColor, day);
 
     accum += col * band * BRIGHTNESS;
   }
@@ -200,5 +210,134 @@ function drawAtmosphere() {
   blendMode(ADD);
   image(atmoBuffer, 0, 0);
   blendMode(BLEND);
+  pop();
+}
+
+function sunWorldPos() {
+  for (let p of planets) {
+    if (p.isSun) return { x: p.center.x, y: p.center.y };
+  }
+  // No sun body in this system, so use the orbital center the planets were
+  // built around — it doubles as the light source the atmosphere/clouds shade
+  // from, and the planets orbit it at a large radius so it sits far out in
+  // space (well clear of any planet).
+  return { x: 10000, y: -100 };
+}
+
+// Where the lens flare originates. Not the far-off sun itself, but the
+// brightest point of the nearby planet's atmosphere — its sunward limb, at the
+// outer edge of the bright band — so the flare reads as glinting off the
+// glowing edge rather than from empty space. Returns a world point.
+function flareSourceWorld() {
+  const FLARE_EDGE = 0.45; // 0 = surface, 1 = atmosphere top
+
+  // Prefer the body the ship is closest to; else the atmosphered planet
+  // nearest the current view focus.
+  let p = null;
+  if (typeof lander !== "undefined" && lander && lander.nearestPlanet &&
+      lander.nearestPlanet.hasAtmosphere && lander.nearestPlanet.hasAtmosphere()) {
+    p = lander.nearestPlanet;
+  } else {
+    let bestD = Infinity;
+    for (let q of planets) {
+      if (q.isSun || !q.hasAtmosphere || !q.hasAtmosphere()) continue;
+      let dx = q.center.x - view.focusX, dy = q.center.y - view.focusY;
+      let d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; p = q; }
+    }
+  }
+  if (!p) return sunWorldPos();
+
+  // Direction to the sun, rotated by the same cosmetic day-cycle the
+  // atmosphere shader applies (a = u_time * 0.005, u_time = frameCount * 0.05),
+  // so the flare lands exactly on the bright limb as the terminator drifts.
+  let sw = sunWorldPos();
+  let dx = sw.x - p.center.x, dy = sw.y - p.center.y;
+  let L = Math.hypot(dx, dy) || 1;
+  dx /= L; dy /= L;
+  let a = (frameCount * 0.05) * 0.005;
+  let ca = Math.cos(a), sa = Math.sin(a);
+  let rx = ca * dx - sa * dy;
+  let ry = sa * dx + ca * dy;
+
+  let inner = p.baseRadius;
+  let outer = p.atmosphereOuterRadius();
+  let R = inner + FLARE_EDGE * (outer - inner);
+  return { x: p.center.x + rx * R, y: p.center.y + ry * R };
+}
+
+// Screen-space sun lens flare. Anchored at the bright sunward edge of the
+// nearby planet's atmosphere (see flareSourceWorld), with a bright halo ring
+// there plus ghost rings marching along the axis through the screen center —
+// the classic lens-flare layout. Drawn on top of the world (additive), so it's
+// never occluded and slides across the view as the camera follows the ship.
+// Tunables live at the top of the function.
+function drawSunFlare() {
+  const RING_R = 95;       // primary halo ring radius (screen px)
+  const CORE_R = 130;      // sun core glow radius
+  const FADE_PX = 1400;    // how far off-screen the sun can be before it fades
+
+  // Intensity from the debug "Sun Flare" slider (0 = off). Scales the whole
+  // flare, since every element below is multiplied by `vis`.
+  let intensity = (typeof DEBUG !== "undefined" && typeof DEBUG.sunFlare === "number")
+    ? DEBUG.sunFlare : 1;
+  if (intensity <= 0) return;
+
+  let sw = flareSourceWorld();
+  let S = worldToScreen(sw.x, sw.y);
+  let cx = width / 2, cy = height / 2;
+
+  // Fade out only when the source is far outside the viewport, so the ghost
+  // chain still reads while the bright limb itself is just off-frame.
+  let offX = Math.max(0, -S.x, S.x - width);
+  let offY = Math.max(0, -S.y, S.y - height);
+  let vis = (1 - constrain(Math.hypot(offX, offY) / FADE_PX, 0, 1)) * intensity;
+  if (vis <= 0) return;
+
+  // Axis from the sun through screen center; ghosts are placed along it.
+  let ax = S.x - cx, ay = S.y - cy;
+
+  push();
+  blendMode(ADD);
+
+  // Sun core glow — stacked soft discs, bright center to faint halo.
+  noStroke();
+  for (let i = 0; i < 6; i++) {
+    let t = i / 5;
+    let rad = lerp(CORE_R, 14, t);
+    fill(255, 240, 205, (8 + 52 * t) * vis);
+    circle(S.x, S.y, rad * 2);
+  }
+
+  // Primary bright halo ring at the sun.
+  noFill();
+  stroke(255, 220, 155, 110 * vis);
+  strokeWeight(5);
+  circle(S.x, S.y, RING_R * 2);
+  stroke(255, 248, 222, 175 * vis);
+  strokeWeight(1.5);
+  circle(S.x, S.y, RING_R * 2);
+
+  // Ghost rings/discs along the axis through center (k is the fraction from
+  // center toward the sun; negative = the mirrored side).
+  let ghosts = [
+    { k:  0.62, r: 34, a: 55, c: [170, 215, 255] },
+    { k:  0.30, r: 66, a: 42, c: [255, 205, 165] },
+    { k:  0.05, r: 24, a: 62, c: [255, 240, 210] },
+    { k: -0.30, r: 48, a: 34, c: [200, 255, 220] },
+    { k: -0.65, r: 84, a: 26, c: [255, 200, 240] },
+  ];
+  for (let g of ghosts) {
+    let gx = cx + ax * g.k;
+    let gy = cy + ay * g.k;
+    noFill();
+    stroke(g.c[0], g.c[1], g.c[2], g.a * vis);
+    strokeWeight(2);
+    circle(gx, gy, g.r * 2);
+    noStroke();
+    fill(g.c[0], g.c[1], g.c[2], g.a * 0.22 * vis);
+    circle(gx, gy, g.r * 0.7);
+  }
+
   pop();
 }

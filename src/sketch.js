@@ -453,6 +453,10 @@ function draw() {
 
   pop();
 
+  // Sun lens flare — screen space, on top of the world so it's never occluded
+  // and slides across the view as the camera follows the ship.
+  drawSunFlare();
+
   pollInput(timeScale);
   if (gameState !== GAME_STATES.WAITING) {
     drawHUD();

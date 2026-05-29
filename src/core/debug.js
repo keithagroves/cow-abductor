@@ -21,6 +21,7 @@ const DEBUG = {
   atmosphereLayers: 6,    // visual gradient steps
   atmosphereCurve: 3.0,   // >1 clusters gradient layers toward outer edge
   atmosphereInnerBand: 1.0, // multiplier on the opaque inner band thickness
+  sunFlare: 1.0,          // sun lens-flare intensity (0 = off)
   burnSpeedThreshold: 5,  // speed/frame below this, no burn
   burnIntensity: 0.6,     // particle emission scale
   heatGain: 0.02,         // hull heat gained per (density * excess speed) per frame
@@ -32,7 +33,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 11;
+const DEBUG_VERSION = 12;
 
 function loadDebugFromStorage() {
   try {
@@ -83,6 +84,7 @@ const DEBUG_PARAMS = [
   { key: "atmosphereLayers",  label: "Atmo Gradient Steps", min: 1, max: 20,    step: 1,     live: true },
   { key: "atmosphereCurve",   label: "Atmo Layer Curve",  min: 1,    max: 8,    step: 0.1,   live: true },
   { key: "atmosphereInnerBand", label: "Atmo Inner Band", min: 0.1,  max: 8,    step: 0.1,   live: true },
+  { key: "sunFlare",          label: "Sun Flare",         min: 0,    max: 3,    step: 0.05,  live: true },
   { key: "burnSpeedThreshold",label: "Burn Speed Min",    min: 0,    max: 30,   step: 0.5,   live: true },
   { key: "burnIntensity",     label: "Burn Intensity",    min: 0,    max: 3.0,  step: 0.05,  live: true },
   { key: "heatGain",          label: "Heat Gain",         min: 0,    max: 0.2,  step: 0.005, live: true },
