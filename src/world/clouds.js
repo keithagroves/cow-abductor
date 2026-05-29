@@ -42,6 +42,10 @@ uniform float u_planetInnerR[MAX_PLANETS];   // floor of cloud band (near surfac
 uniform float u_planetOuterR[MAX_PLANETS];   // ceiling of cloud band
 uniform vec2 u_sunPos;
 
+// Slow uniform cloud drift (noise units per time unit). Tuned low so clouds
+// morph gently in place instead of racing — bump it up for windier skies.
+const float CLOUD_DRIFT = 0.004;
+
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
@@ -97,18 +101,16 @@ void main() {
     float h = (dist - innerR) / (outerR - innerR);
     float altDensity = smoothstep(0.0, 0.25, h) * (1.0 - smoothstep(0.7, 1.0, h));
 
-    // Rotate the noise sample around the planet so the cloud field drifts.
-    // This is the 2D analogue of the article's morphing-SDF animation —
-    // continuous motion via a slow rotation in noise space.
-    float cloudAngle = u_time * 0.015;
-    float cc = cos(cloudAngle);
-    float ss = sin(cloudAngle);
-    vec2 local = vec2(cc * d.x - ss * d.y, ss * d.x + cc * d.y);
-
-    // FBM in local frame. 0.0008 tunes feature size — lower = bigger puffs.
-    // Adding a slow translation in noise space on top of the rotation gives
-    // the field internal "breathing" independent of the orbital drift.
-    float density = fbm(local * 0.0008 + vec2(u_time * 0.003, 0.0));
+    // Clouds are pinned to the planet's local frame. The old version rotated
+    // the whole field around the planet center, which gave clouds near the
+    // limb a huge linear speed — they raced around and read as disorienting
+    // parallax. Instead we sample in the fixed local frame and let the field
+    // drift very gently (like a light wind) and morph in place, so motion is
+    // calm and roughly uniform across the whole disc.
+    // 0.0008 tunes feature size — lower = bigger puffs. CLOUD_DRIFT is in
+    // noise units per time unit; small = slow.
+    vec2 local = d;
+    float density = fbm(local * 0.0008 + vec2(u_time * CLOUD_DRIFT, u_time * CLOUD_DRIFT * 0.4));
     // Threshold so most of the sky is clear and only the upper noise band
     // forms cloud. Multiply by altDensity to apply the vertical profile.
     density = smoothstep(0.46, 0.72, density) * altDensity;

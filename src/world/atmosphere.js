@@ -1,8 +1,9 @@
-// Per-planet atmosphere shader. Inspired by Maxime Heckel's sky/sunset/planet
-// rendering post, adapted from 3D volumetric raymarching down to a 2D ring
-// model: each planet's atmosphere is a slab between baseRadius and the outer
-// edge, and we sample Rayleigh + Mie contributions per screen pixel in world
-// space using the camera transform from sketch.js.
+// Per-planet atmosphere shader. A deliberately simple 2D model: for each
+// screen pixel we find the planet it falls over (in world space, via the
+// camera transform from sketch.js) and draw a single soft glow band in the
+// slab between baseRadius and the outer edge — lit blue on the day side, warm
+// at the sunset terminator, faint on the night side. No raymarching or
+// physical scattering; just one band shaded by the sun direction.
 
 const ATMO_MAX_PLANETS = 10;
 
@@ -38,44 +39,22 @@ uniform vec3 u_atmoColor[MAX_PLANETS];
 uniform vec2 u_sunPos;
 uniform float u_time;
 
-#define PI 3.141592653589793
-#define SUN_STEPS 10
-
-// Wavelength-dependent Rayleigh scattering. Blue (b) scatters ~5.7x more than
-// red (r) — these are Heckel's coefficients. This single spectrum drives BOTH
-// the blue of the lit sky (in-scattering, below) AND the orange/red of sunset
-// (extinction of the long tangential sunlight path), which is the whole trick.
-const vec3 BETA_R = vec3(0.0058, 0.0135, 0.0331);
-const float BETA_M = 0.021;   // Mie — wavelength independent, hazy white glow
-const float MIE_G  = 0.76;    // forward-scattering anisotropy (sun-side glare)
-
-// Beer's-law density falloff exponents. Mie hugs the surface more tightly than
-// Rayleigh, so haze and the warm sunset band concentrate right at the limb.
-const float FALLOFF_R = 3.5;
-const float FALLOFF_M = 7.0;
-
-// Tunables for the faked (non-physical-units) 2D model.
-const float EXTINCT = 6.0;    // how strongly the sun path reddens the light
-const float SUN_I   = 18.0;   // sun intensity / overall brightness
-const float RAY_K   = 1.4;    // Rayleigh in-scatter strength
-const float MIE_K   = 0.06;   // Mie in-scatter strength
-
-float rayleighPhase(float mu) {
-  return 3.0 / (16.0 * PI) * (1.0 + mu * mu);
-}
-
-float miePhase(float mu) {
-  float gg = MIE_G * MIE_G;
-  float num = 3.0 * (1.0 - gg) * (1.0 + mu * mu);
-  float den = 8.0 * PI * (2.0 + gg) * pow(max(1.0 + gg - 2.0 * MIE_G * mu, 1e-4), 1.5);
-  return num / den;
-}
+// One soft glow band floating in the atmosphere — that's the whole model.
+// BAND_CENTER is its altitude (0 = surface, 1 = outer edge), BAND_WIDTH its
+// thickness. A Gaussian fades it smoothly to ~0 at both ends so there are no
+// hard layer edges, and because it floats above the surface the ship sweeps
+// past it like a halo. The band is lit by the sun with a soft day/night, a
+// warm sunset at the terminator, and a faint (never black) night side.
+const float BAND_CENTER = 0.40;
+const float BAND_WIDTH  = 0.28;
+const float BRIGHTNESS  = 1.7;
+const float SUNSET_K    = 0.9;   // warm terminator glow strength
+const float NIGHT_FLOOR = 0.12;  // dark side dims to this, never to black
 
 void main() {
   // p5 P2D canvas is y-down; vTexCoord.y from the WEBGL buffer is y-up, and
   // image() doesn't flip on blit. Flip Y here so the pixel coords match the
-  // world point sketch.js drew the planets at — otherwise the atmosphere
-  // ring renders mirrored above/below the planet.
+  // world point sketch.js drew the planets at.
   vec2 pixel = vec2(vTexCoord.x * u_resolution.x,
                     (1.0 - vTexCoord.y) * u_resolution.y);
   // Inverse of the sketch.js camera transform: center → unrotate → unscale → +focus.
@@ -91,83 +70,38 @@ void main() {
     if (i >= u_planetCount) break;
     vec2 pc = u_planetPos[i];
     vec2 d = world - pc;
-    float r = u_planetRadius[i];
+    float r  = u_planetRadius[i];
     float ra = u_atmoRadius[i];
     float dist = length(d);
-    if (dist >= ra) continue;
-    if (dist <= r) continue;
+    if (dist >= ra || dist <= r) continue;
 
-    float thickness = max(ra - r, 0.0001);
-    // Altitude through the atmosphere: 0 at surface, 1 at outer edge.
-    float h = (dist - r) / thickness;
-    // Beer's-law profile, but faded to exactly zero at the outer edge so the
-    // sky melts into space instead of stopping at a hard ring. Without the
-    // smoothstep the density is still ~0.03 at h=1 and that step shows up as a
-    // visible circle floating above the horizon.
-    float edgeFade = 1.0 - smoothstep(0.65, 1.0, h);
-    float densityR = exp(-h * FALLOFF_R) * edgeFade;
-    float densityM = exp(-h * FALLOFF_M) * edgeFade;
+    // Altitude 0..1, then the smooth Gaussian glow band.
+    float h = (dist - r) / max(ra - r, 0.0001);
+    float band = exp(-pow((h - BAND_CENTER) / BAND_WIDTH, 2.0));
 
+    // Sun direction, slowly rotated so the terminator drifts (cosmetic day
+    // cycle; matches the clouds' rotation).
     vec2 outward = d / max(dist, 0.0001);
-    // Rotate the apparent sun direction around the planet over time so the
-    // day/night terminator sweeps slowly across the sky. The world-space
-    // sun position is unchanged — this is just a cosmetic day-cycle.
     vec2 toSunRaw = normalize(u_sunPos - pc);
-    float dayAngle = u_time * 0.005;
-    float dc = cos(dayAngle);
-    float ds = sin(dayAngle);
-    vec2 toSun = vec2(dc * toSunRaw.x - ds * toSunRaw.y,
-                      ds * toSunRaw.x + dc * toSunRaw.y);
+    float a = u_time * 0.005;
+    vec2 toSun = vec2(cos(a) * toSunRaw.x - sin(a) * toSunRaw.y,
+                      sin(a) * toSunRaw.x + cos(a) * toSunRaw.y);
+    float sunDot = dot(outward, toSun);
 
-    // March toward the sun, accumulating the optical depth of the path the
-    // sunlight travels to reach this point. A long path (grazing the limb near
-    // the terminator) scatters the blue out and leaves warm light → sunset. If
-    // the ray runs into the planet first, this point is in shadow → night side.
-    float segLen = (2.0 * ra) / float(SUN_STEPS);
-    float odR = 0.0;
-    float odM = 0.0;
-    bool lit = true;
-    vec2 sp = world;
-    for (int j = 0; j < SUN_STEPS; j++) {
-      sp += toSun * segLen;
-      float sd = length(sp - pc);
-      if (sd <= r) { lit = false; break; }   // sun occluded by the planet
-      if (sd >= ra) break;                    // left the atmosphere — done
-      float sh = (sd - r) / thickness;
-      odR += exp(-sh * FALLOFF_R);
-      odM += exp(-sh * FALLOFF_M);
-    }
-    if (!lit) continue;  // planet shadow — leave the night limb dark
+    // One smoothstep across the terminator → soft day/night, no abrupt line.
+    float day = smoothstep(-0.25, 0.3, sunDot);
+    // Warm glow that peaks right at the terminator, on the lit side only.
+    float sunset = exp(-sunDot * sunDot * 8.0) * day;
 
-    float odNorm = segLen / thickness;
-    odR *= odNorm;
-    odM *= odNorm;
+    // Per-planet blue sky on the lit side fading to a faint same-hue night
+    // side, plus the orange sunset added at the terminator.
+    vec3 col = mix(u_atmoColor[i] * NIGHT_FLOOR, u_atmoColor[i], day)
+             + vec3(1.0, 0.5, 0.25) * (sunset * SUNSET_K);
 
-    // Wavelength-dependent transmittance of the sunlight reaching this point.
-    // Because BETA_R.b >> BETA_R.r, a long path kills blue first → it warms
-    // through yellow and orange to deep red exactly as the path lengthens.
-    vec3 Tsun = exp(-(BETA_R * EXTINCT) * odR - vec3(BETA_M * EXTINCT) * odM);
-
-    // Scattering angle proxy: outward radial vs. sun direction. mu→1 on the
-    // sub-solar limb (bright forward Mie glare), mu→0 at the terminator.
-    float mu = dot(outward, toSun);
-    float phaseR = rayleighPhase(mu);
-    float phaseM = miePhase(mu);
-
-    // Rayleigh in-scatter keeps the blue-dominant spectrum but is nudged toward
-    // each planet's own sky hue so worlds stay visually distinct.
-    vec3 rayColor = mix(BETA_R / BETA_R.b, u_atmoColor[i], 0.45);
-
-    vec3 scatter = SUN_I * Tsun * (
-        rayColor          * phaseR * densityR * RAY_K +
-        vec3(1.0, 0.9, 0.8) * phaseM * densityM * MIE_K
-    );
-
-    accum += scatter;
+    accum += col * band * BRIGHTNESS;
   }
 
-  // Filmic-ish rolloff so saturated sunsets and the sub-solar glare don't
-  // hard-clip to flat white.
+  // Soft rolloff so nothing hard-clips to flat white.
   accum = vec3(1.0) - exp(-accum);
   gl_FragColor = vec4(accum, 1.0);
 }
