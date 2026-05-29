@@ -70,8 +70,10 @@ float fbm(vec2 p) {
 
 void main() {
   // Reconstruct the world point under this pixel. Same inverse-camera math
-  // as atmosphere.js so the cloud field aligns with the rest of the scene.
-  vec2 pixel = vTexCoord * u_resolution;
+  // (and same WEBGL→P2D Y flip) as atmosphere.js so the cloud field aligns
+  // with the rest of the scene.
+  vec2 pixel = vec2(vTexCoord.x * u_resolution.x,
+                    (1.0 - vTexCoord.y) * u_resolution.y);
   vec2 centered = pixel - u_screenCenter;
   float c = cos(-u_viewRotation);
   float s = sin(-u_viewRotation);
@@ -121,7 +123,14 @@ void main() {
     // The cloud color lerps from a cool grey-blue (night/shadow side) to
     // warm white (lit side).
     vec2 outward = d / max(dist, 0.0001);
-    vec2 toSun = normalize(u_sunPos - u_planetPos[i]);
+    // Match the day-cycle rotation from atmosphere.js so cloud shading
+    // tracks the same moving terminator.
+    vec2 toSunRaw = normalize(u_sunPos - u_planetPos[i]);
+    float dayAngle = u_time * 0.005;
+    float dc = cos(dayAngle);
+    float ds = sin(dayAngle);
+    vec2 toSun = vec2(dc * toSunRaw.x - ds * toSunRaw.y,
+                      ds * toSunRaw.x + dc * toSunRaw.y);
     float sunDot = dot(outward, toSun);
     float lit = smoothstep(-0.25, 0.45, sunDot);
     vec3 sunlit = vec3(1.0, 0.98, 0.94);

@@ -747,6 +747,18 @@ class Lander {
       if (inBeam) plant.abduct();
       else plant.drop();
     }
+
+    for (let mineral of minerals) {
+      if (mineral.state === "intact" || mineral.state === "stowed") continue;
+      let inBeam = false;
+      if (canGrab) {
+        let mPos = createVector(mineral.pos.x, mineral.pos.y);
+        let close = dist(this.pos.x, this.pos.y, mineral.pos.x, mineral.pos.y) < 50;
+        inBeam = pointInTriangle(mPos, A, B, C) || close;
+      }
+      if (inBeam) mineral.abduct();
+      else mineral.drop();
+    }
   }
 }
 

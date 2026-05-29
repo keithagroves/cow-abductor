@@ -58,9 +58,10 @@ class Planet {
     // Independent seed so this ridge's peaks don't align with main terrain's.
     let noiseOffset = random(1000) + 500;
     let points = [];
-    // Amplitude slightly larger than the main terrain so some peaks rise
-    // above the foreground silhouette and become visible "horizon" mountains.
-    let amplitude = this.noiseIntensity * 1.3;
+    // Amplitude smaller than the main terrain so the ridge mostly sits
+    // below the foreground silhouette and only an occasional peak pokes
+    // above as a distant "horizon" mountain.
+    let amplitude = this.noiseIntensity * 0.9;
     for (let i = 0; i < pointCount; i++) {
       let angle = i * angleStep;
       let r = this.baseRadius + noise(noiseOffset) * amplitude;
@@ -474,28 +475,12 @@ class Planet {
       }
     }
 
-    // Atmosphere as a single radial gradient: opaque sky-blue just above the
-    // terrain (covered by the planet body on the inside), fading to fully
-    // transparent at the outer edge. Drawn before the planet body so the
-    // opaque inner disk only shows as a ring around the surface.
-    if (this.hasAtmosphere()) {
-      let outer = this.atmosphereOuterRadius();
-      let bandThickness = max(80, this.baseRadius * 0.05) * DEBUG.atmosphereInnerBand;
-      let opaqueInner = this.baseRadius + this.noiseIntensity + bandThickness;
-      let cx = this.center.x;
-      let cy = this.center.y;
+    // Atmosphere is handled entirely by the shader in atmosphere.js so the
+    // day side gets a lit sky and the night side stays dark (starfield
+    // visible). A rotationally-symmetric gradient here would paint blue
+    // everywhere and defeat the terminator.
 
-      let ctx = drawingContext;
-      let grad = ctx.createRadialGradient(cx, cy, opaqueInner, cx, cy, outer);
-      grad.addColorStop(0, "rgba(120, 180, 230, 1)");
-      grad.addColorStop(1, "rgba(140, 200, 255, 0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, outer, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Background ridge — distant-mountain silhouette painted in atmospheric
+// Background ridge — distant-mountain silhouette painted in atmospheric
     // haze, drawn before the main terrain so its peaks read as horizon hills
     // behind the foreground. Only the parts that stick above the foreground
     // outline are visible; the rest gets covered when we draw the main body.

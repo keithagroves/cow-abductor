@@ -8,6 +8,7 @@ let alienImage;
 let lander;
 let cows = [];
 let flora = [];
+let minerals = [];
 let lasers = [];
 let planets = []; // This is our array of planets
 let base;
@@ -19,6 +20,9 @@ let crashParticles = [];
 let stars = [];
 let cowImage;
 let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0 };
+// Overview/map mode — press M to toggle. Frames the whole solar system
+// (every planet's orbital extent) instead of following the ship.
+let overviewMode = false;
 let startTime;
 let lastDiagnosticLog = 0;
 let eventMessage = "";
@@ -436,6 +440,10 @@ function draw() {
     plant.render();
   }
 
+  for (let mineral of minerals) {
+    mineral.render();
+  }
+
   // Render all cows
   for (let cow of cows) {
     cow.render();
@@ -470,6 +478,7 @@ function resetGame() {
   resetPlanetDiscoveries();
   initializeCows();
   initializePlants();
+  initializeMinerals();
   burnParticles = [];
   splashParticles = [];
   crashParticles = [];
@@ -547,6 +556,7 @@ function tryDeliver() {
   cargo = 0;
   cows = cows.filter((c) => c.state !== "stowed");
   flora = flora.filter((p) => p.state !== "stowed");
+  minerals = minerals.filter((m) => m.state !== "stowed");
   showEvent(`Delivered ${payload} specimen${payload === 1 ? "" : "s"}  +${payload} research`);
   if (delivered >= DELIVERY_GOAL) {
     gameState = GAME_STATES.GAMEOVER;
@@ -592,30 +602,81 @@ function initializeCows() {
   }
 }
 
+// Pick a random surface angle that's above water on this planet. Returns
+// {angle, surfaceR} on success or null after too many failed attempts.
+function pickDryAngle(planet, maxAttempts = 20) {
+  let seaR = planet.seaLevel > 0 ? planet.baseRadius + planet.seaLevel : 0;
+  for (let i = 0; i < maxAttempts; i++) {
+    let angle = random(360);
+    let surfaceR = getSurfaceRadius(planet, angle);
+    if (seaR > 0 && surfaceR < seaR) continue;
+    return { angle, surfaceR };
+  }
+  return null;
+}
+
+// Spawn `count` instances clustered around `centerAngle`, each within
+// ±halfArc° of the center. ctor takes (planet, angle, radius) and returns
+// the instance, which is pushed onto `into`.
+function spawnCluster(planet, centerAngle, halfArc, count, radiusOffset, into, ctor) {
+  let seaR = planet.seaLevel > 0 ? planet.baseRadius + planet.seaLevel : 0;
+  for (let i = 0; i < count; i++) {
+    let a = centerAngle + (random() - 0.5) * 2 * halfArc;
+    let surfaceR = getSurfaceRadius(planet, a);
+    if (seaR > 0 && surfaceR < seaR) continue;
+    into.push(ctor(planet, a, surfaceR + radiusOffset));
+  }
+}
+
 function initializePlants() {
   flora = [];
   for (let planet of planets) {
     if (planet.isSun) continue;
-    let landablePoints = planet.landscape.filter((p) => p.landable);
-    if (landablePoints.length === 0) continue;
-    let angleStep = 360 / planet.numPoints;
+    if (!planet.landscape || planet.landscape.length < 2) continue;
 
-    // Pack a dense grove at every landable grid point — 2 or 3 trees per
-    // point with sub-grid jitter so they form a field rather than a row.
-    for (let lp of landablePoints) {
-      let count = floor(random(2, 4));
-      for (let i = 0; i < count; i++) {
-        let angle = lp.angle + (random() - 0.5) * angleStep * 0.9;
-        let radius = lp.r + 10 + random(-2, 5);
-        let plant = new Plant(planet, angle, radius);
+    // 3-5 groves per planet, each a cluster of 4-10 trees within a small
+    // arc. Random centers (not pinned to landing pads) so players have to
+    // hunt across the surface for them.
+    let numGroves = floor(random(3, 6));
+    for (let g = 0; g < numGroves; g++) {
+      let spot = pickDryAngle(planet);
+      if (!spot) continue;
+      let count = floor(random(4, 11));
+      let halfArc = 2 + random() * 3;
+      spawnCluster(planet, spot.angle, halfArc, count, 10, flora, (pl, a, r) => {
+        let plant = new Plant(pl, a, r);
         plant.scale = 0.55 + random() * 0.7;
-        flora.push(plant);
-      }
+        return plant;
+      });
     }
   }
   // Render small/background trees first, big foreground trees last — gives
   // the grove a cheap parallax depth without sorting per frame.
   flora.sort((a, b) => a.scale - b.scale);
+}
+
+function initializeMinerals() {
+  minerals = [];
+  for (let planet of planets) {
+    if (planet.isSun) continue;
+    if (!planet.landscape || planet.landscape.length < 2) continue;
+
+    // 2-4 deposits per planet, each a cluster of 4-10 rocks.
+    let numDeposits = floor(random(2, 5));
+    for (let d = 0; d < numDeposits; d++) {
+      let spot = pickDryAngle(planet);
+      if (!spot) continue;
+      // Skip if the cluster center sits on a landing pad arc — keep pads clear.
+      let nearPad = planet.landscape.some(
+        (lp) => lp.landable && abs(((lp.angle - spot.angle + 540) % 360) - 180) < 4
+      );
+      if (nearPad) continue;
+      let count = floor(random(4, 11));
+      let halfArc = 1.5 + random() * 2;
+      spawnCluster(planet, spot.angle, halfArc, count, 6, minerals, (pl, a, r) => new Mineral(pl, a, r));
+    }
+  }
+  minerals.sort((a, b) => a.scale - b.scale);
 }
 
 /*********************************************************
@@ -650,6 +711,10 @@ function updateWorld(timeScale = 1) {
 
   for (let plant of flora) {
     plant.update(timeScale);
+  }
+
+  for (let mineral of minerals) {
+    mineral.update(timeScale);
   }
 
   updateBurnParticles(timeScale);
@@ -963,7 +1028,7 @@ function fireLaser(screenX, screenY) {
   let ny = dy / d;
 
   let hitDist = LASER_MAX_RANGE;
-  let hitPlant = null;
+  let hitTarget = null;
 
   // Closest plant whose center lies within LASER_HIT_RADIUS of the ray.
   for (let plant of flora) {
@@ -977,7 +1042,23 @@ function fireLaser(screenX, screenY) {
     let perpD = sqrt(perpX * perpX + perpY * perpY);
     if (perpD < LASER_HIT_RADIUS) {
       hitDist = along;
-      hitPlant = plant;
+      hitTarget = plant;
+    }
+  }
+
+  // Minerals share the same ray-hit test as plants.
+  for (let mineral of minerals) {
+    if (mineral.state !== "intact") continue;
+    let mdx = mineral.pos.x - lander.pos.x;
+    let mdy = mineral.pos.y - lander.pos.y;
+    let along = mdx * nx + mdy * ny;
+    if (along < 0 || along > hitDist) continue;
+    let perpX = mdx - nx * along;
+    let perpY = mdy - ny * along;
+    let perpD = sqrt(perpX * perpX + perpY * perpY);
+    if (perpD < LASER_HIT_RADIUS) {
+      hitDist = along;
+      hitTarget = mineral;
     }
   }
 
@@ -987,7 +1068,7 @@ function fireLaser(screenX, screenY) {
     let terrainHit = rayHitsTerrain(lander.pos, nx, ny, LASER_MAX_RANGE, lander.nearestPlanet);
     if (terrainHit < hitDist) {
       hitDist = terrainHit;
-      hitPlant = null;
+      hitTarget = null;
     }
   }
 
@@ -996,7 +1077,7 @@ function fireLaser(screenX, screenY) {
 
   lasers.push({ endX, endY, life: 1 });
 
-  if (hitPlant) hitPlant.zap();
+  if (hitTarget) hitTarget.zap();
 }
 
 function updateAndDrawLasers(timeScaleLocal = 1) {
@@ -1378,9 +1459,46 @@ function resetView() {
   }
 }
 
+function computeOverviewBox() {
+  // Bounding box covering every planet's full orbital extent (orbitCenter ±
+  // orbitRadius) plus its atmosphere radius. Using orbital extent instead of
+  // current position keeps the framing stable as planets move.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let p of planets) {
+    let r = (p.atmosphereOuterRadius ? p.atmosphereOuterRadius() : p.baseRadius) || 0;
+    let cx, cy, reach;
+    if (p.orbitCenter && p.orbitRadius > 0) {
+      cx = p.orbitCenter.x;
+      cy = p.orbitCenter.y;
+      reach = p.orbitRadius + r;
+    } else {
+      cx = p.center.x;
+      cy = p.center.y;
+      reach = r;
+    }
+    minX = Math.min(minX, cx - reach);
+    minY = Math.min(minY, cy - reach);
+    maxX = Math.max(maxX, cx + reach);
+    maxY = Math.max(maxY, cy + reach);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
 function updateView() {
   let targetScale;
-  if (DEBUG.zoomOverride > 0) {
+  let targetFocusX, targetFocusY;
+  let trackShip = true;
+
+  if (overviewMode) {
+    let box = computeOverviewBox();
+    let boxW = max(1, box.maxX - box.minX);
+    let boxH = max(1, box.maxY - box.minY);
+    // 0.85 leaves some padding around the bounding box.
+    targetScale = Math.min(width / boxW, height / boxH) * 0.85;
+    targetFocusX = (box.minX + box.maxX) / 2;
+    targetFocusY = (box.minY + box.maxY) / 2;
+    trackShip = false;
+  } else if (DEBUG.zoomOverride > 0) {
     // Manual zoom — debug flag forces a specific scale regardless of altitude.
     targetScale = DEBUG.zoomOverride;
   } else {
@@ -1397,19 +1515,24 @@ function updateView() {
 
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;
 
-  // Add the ship's world-frame velocity each step so easing only has to
-  // correct displacement, not chase a constantly-moving target. Without this
-  // the focus lags by vel/ease pixels at steady state (~190 px when riding
-  // the moon at 35 px/frame).
-  let worldVx = lander.vel.x;
-  let worldVy = lander.vel.y;
-  if (gameState === GAME_STATES.LANDED && lander.landingPlanet && lander.landingPlanet.getOrbitalVelocity) {
-    let pv = lander.landingPlanet.getOrbitalVelocity();
-    worldVx = pv.x;
-    worldVy = pv.y;
+  if (trackShip) {
+    // Add the ship's world-frame velocity each step so easing only has to
+    // correct displacement, not chase a constantly-moving target. Without this
+    // the focus lags by vel/ease pixels at steady state (~190 px when riding
+    // the moon at 35 px/frame).
+    let worldVx = lander.vel.x;
+    let worldVy = lander.vel.y;
+    if (gameState === GAME_STATES.LANDED && lander.landingPlanet && lander.landingPlanet.getOrbitalVelocity) {
+      let pv = lander.landingPlanet.getOrbitalVelocity();
+      worldVx = pv.x;
+      worldVy = pv.y;
+    }
+    view.focusX += worldVx * timeScale + (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
+    view.focusY += worldVy * timeScale + (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
+  } else {
+    view.focusX += (targetFocusX - view.focusX) * CAMERA_FOLLOW_EASE;
+    view.focusY += (targetFocusY - view.focusY) * CAMERA_FOLLOW_EASE;
   }
-  view.focusX += worldVx * timeScale + (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
-  view.focusY += worldVy * timeScale + (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
 }
 
 function getClosestSurfaceDistance() {
@@ -2167,6 +2290,13 @@ function drawGameStateMessages() {
  *                   INPUT
  *********************************************************/
 function keyPressed() {
+  // Overview toggle works from any state — held above the gameState gates
+  // so the player can pull up the system map from the title/landed screens
+  // without dismissing them.
+  if (key === "m" || key === "M") {
+    overviewMode = !overviewMode;
+    return;
+  }
   if (gameState === GAME_STATES.WAITING) {
     startGame();
     return;

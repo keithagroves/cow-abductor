@@ -36,11 +36,48 @@ uniform float u_planetRadius[MAX_PLANETS];
 uniform float u_atmoRadius[MAX_PLANETS];
 uniform vec3 u_atmoColor[MAX_PLANETS];
 uniform vec2 u_sunPos;
+uniform float u_time;
+
+#define PI 3.141592653589793
+#define SUN_STEPS 10
+
+// Wavelength-dependent Rayleigh scattering. Blue (b) scatters ~5.7x more than
+// red (r) — these are Heckel's coefficients. This single spectrum drives BOTH
+// the blue of the lit sky (in-scattering, below) AND the orange/red of sunset
+// (extinction of the long tangential sunlight path), which is the whole trick.
+const vec3 BETA_R = vec3(0.0058, 0.0135, 0.0331);
+const float BETA_M = 0.021;   // Mie — wavelength independent, hazy white glow
+const float MIE_G  = 0.76;    // forward-scattering anisotropy (sun-side glare)
+
+// Beer's-law density falloff exponents. Mie hugs the surface more tightly than
+// Rayleigh, so haze and the warm sunset band concentrate right at the limb.
+const float FALLOFF_R = 3.5;
+const float FALLOFF_M = 7.0;
+
+// Tunables for the faked (non-physical-units) 2D model.
+const float EXTINCT = 6.0;    // how strongly the sun path reddens the light
+const float SUN_I   = 18.0;   // sun intensity / overall brightness
+const float RAY_K   = 1.4;    // Rayleigh in-scatter strength
+const float MIE_K   = 0.06;   // Mie in-scatter strength
+
+float rayleighPhase(float mu) {
+  return 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+}
+
+float miePhase(float mu) {
+  float gg = MIE_G * MIE_G;
+  float num = 3.0 * (1.0 - gg) * (1.0 + mu * mu);
+  float den = 8.0 * PI * (2.0 + gg) * pow(max(1.0 + gg - 2.0 * MIE_G * mu, 1e-4), 1.5);
+  return num / den;
+}
 
 void main() {
-  // vTexCoord maps 1:1 with P2D pixel coords once the WEBGL buffer is blitted
-  // by image(), so no Y flip is needed here.
-  vec2 pixel = vTexCoord * u_resolution;
+  // p5 P2D canvas is y-down; vTexCoord.y from the WEBGL buffer is y-up, and
+  // image() doesn't flip on blit. Flip Y here so the pixel coords match the
+  // world point sketch.js drew the planets at — otherwise the atmosphere
+  // ring renders mirrored above/below the planet.
+  vec2 pixel = vec2(vTexCoord.x * u_resolution.x,
+                    (1.0 - vTexCoord.y) * u_resolution.y);
   // Inverse of the sketch.js camera transform: center → unrotate → unscale → +focus.
   vec2 centered = pixel - u_screenCenter;
   float c = cos(-u_viewRotation);
@@ -52,38 +89,86 @@ void main() {
 
   for (int i = 0; i < MAX_PLANETS; i++) {
     if (i >= u_planetCount) break;
-    vec2 d = world - u_planetPos[i];
+    vec2 pc = u_planetPos[i];
+    vec2 d = world - pc;
     float r = u_planetRadius[i];
     float ra = u_atmoRadius[i];
     float dist = length(d);
     if (dist >= ra) continue;
     if (dist <= r) continue;
 
+    float thickness = max(ra - r, 0.0001);
     // Altitude through the atmosphere: 0 at surface, 1 at outer edge.
-    float h = (dist - r) / (ra - r);
-    // Tight Gaussian band so the glow only appears as a thin limb ring near
-    // the outer edge, fading off both inward (toward the planet) and outward
-    // (into space).
-    float density = exp(-pow((h - 0.55) / 0.18, 2.0));
+    float h = (dist - r) / thickness;
+    // Beer's-law profile, but faded to exactly zero at the outer edge so the
+    // sky melts into space instead of stopping at a hard ring. Without the
+    // smoothstep the density is still ~0.03 at h=1 and that step shows up as a
+    // visible circle floating above the horizon.
+    float edgeFade = 1.0 - smoothstep(0.65, 1.0, h);
+    float densityR = exp(-h * FALLOFF_R) * edgeFade;
+    float densityM = exp(-h * FALLOFF_M) * edgeFade;
 
     vec2 outward = d / max(dist, 0.0001);
-    vec2 toSun = normalize(u_sunPos - u_planetPos[i]);
-    float sunDot = dot(outward, toSun);
+    // Rotate the apparent sun direction around the planet over time so the
+    // day/night terminator sweeps slowly across the sky. The world-space
+    // sun position is unchanged — this is just a cosmetic day-cycle.
+    vec2 toSunRaw = normalize(u_sunPos - pc);
+    float dayAngle = u_time * 0.005;
+    float dc = cos(dayAngle);
+    float ds = sin(dayAngle);
+    vec2 toSun = vec2(dc * toSunRaw.x - ds * toSunRaw.y,
+                      ds * toSunRaw.x + dc * toSunRaw.y);
 
-    // Day/night with a soft terminator a few degrees wide.
-    float dayNight = smoothstep(-0.15, 0.25, sunDot);
+    // March toward the sun, accumulating the optical depth of the path the
+    // sunlight travels to reach this point. A long path (grazing the limb near
+    // the terminator) scatters the blue out and leaves warm light → sunset. If
+    // the ray runs into the planet first, this point is in shadow → night side.
+    float segLen = (2.0 * ra) / float(SUN_STEPS);
+    float odR = 0.0;
+    float odM = 0.0;
+    bool lit = true;
+    vec2 sp = world;
+    for (int j = 0; j < SUN_STEPS; j++) {
+      sp += toSun * segLen;
+      float sd = length(sp - pc);
+      if (sd <= r) { lit = false; break; }   // sun occluded by the planet
+      if (sd >= ra) break;                    // left the atmosphere — done
+      float sh = (sd - r) / thickness;
+      odR += exp(-sh * FALLOFF_R);
+      odM += exp(-sh * FALLOFF_M);
+    }
+    if (!lit) continue;  // planet shadow — leave the night limb dark
 
-    // Rayleigh — the planet's sky color, brightest on the lit side.
-    vec3 rayleigh = u_atmoColor[i] * dayNight * density * 0.6;
+    float odNorm = segLen / thickness;
+    odR *= odNorm;
+    odM *= odNorm;
 
-    // Mie / sunset — peaks at the terminator, day side only.
-    float terminator = exp(-pow(sunDot * 1.6, 2.0) * 6.0);
-    vec3 mieColor = vec3(1.5, 0.55, 0.2) * terminator * density * dayNight * 0.5;
+    // Wavelength-dependent transmittance of the sunlight reaching this point.
+    // Because BETA_R.b >> BETA_R.r, a long path kills blue first → it warms
+    // through yellow and orange to deep red exactly as the path lengthens.
+    vec3 Tsun = exp(-(BETA_R * EXTINCT) * odR - vec3(BETA_M * EXTINCT) * odM);
 
-    accum += rayleigh + mieColor;
+    // Scattering angle proxy: outward radial vs. sun direction. mu→1 on the
+    // sub-solar limb (bright forward Mie glare), mu→0 at the terminator.
+    float mu = dot(outward, toSun);
+    float phaseR = rayleighPhase(mu);
+    float phaseM = miePhase(mu);
+
+    // Rayleigh in-scatter keeps the blue-dominant spectrum but is nudged toward
+    // each planet's own sky hue so worlds stay visually distinct.
+    vec3 rayColor = mix(BETA_R / BETA_R.b, u_atmoColor[i], 0.45);
+
+    vec3 scatter = SUN_I * Tsun * (
+        rayColor          * phaseR * densityR * RAY_K +
+        vec3(1.0, 0.9, 0.8) * phaseM * densityM * MIE_K
+    );
+
+    accum += scatter;
   }
 
-  accum = min(accum, vec3(1.2));
+  // Filmic-ish rolloff so saturated sunsets and the sub-solar glare don't
+  // hard-clip to flat white.
+  accum = vec3(1.0) - exp(-accum);
   gl_FragColor = vec4(accum, 1.0);
 }
 `;
@@ -143,14 +228,11 @@ function drawAtmosphere() {
     if (p.isSun) continue;
     if (!p.hasAtmosphere || !p.hasAtmosphere()) continue;
     positions.push(p.center.x, p.center.y);
-    // Use the terrain's outer envelope (baseRadius + noiseIntensity) so the
-    // shader's glow ring starts above the highest peaks and doesn't bleed
-    // into pixels already covered by the noise-textured planet body.
-    let effectiveR = Math.min(
-      p.baseRadius + p.noiseIntensity,
-      p.atmosphereOuterRadius() * 0.95
-    );
-    radii.push(effectiveR);
+    // Inner edge at baseRadius (the planet's baseline before mountains).
+    // The planet polygon draws on top of the atmosphere, so peaks naturally
+    // mask the band where they rise — but in valleys the sky reaches all
+    // the way down to the surface instead of stopping at peak altitude.
+    radii.push(p.baseRadius);
     atmoRadii.push(p.atmosphereOuterRadius());
     let sky = planetSkyColor(p);
     colors.push(sky[0], sky[1], sky[2]);
@@ -177,6 +259,7 @@ function drawAtmosphere() {
   atmoShader.setUniform("u_atmoRadius", atmoRadii);
   atmoShader.setUniform("u_atmoColor", colors);
   atmoShader.setUniform("u_sunPos", sunPos);
+  atmoShader.setUniform("u_time", frameCount * 0.05);
   atmoBuffer.rect(0, 0, width, height);
 
   push();
