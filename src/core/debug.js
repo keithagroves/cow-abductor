@@ -25,7 +25,7 @@ const DEBUG = {
   heatGain: 0.02,         // hull heat gained per (density * excess speed) per frame
   heatCool: 0.4,          // hull heat dissipated per frame when not burning
   heatMax: 100,           // hull explodes when heat reaches this value
-  fluidPlume: false,      // experimental GPU stable-fluids exhaust plume (off = particle flame)
+  fluidPlume: true,       // experimental GPU stable-fluids exhaust plume (off = particle flame)
   fluidPlumeScale: 220,   // world-space size of the fluid plume quad
   shown: false
 };
@@ -33,7 +33,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 16;
+const DEBUG_VERSION = 17;
 
 function loadDebugFromStorage() {
   try {
