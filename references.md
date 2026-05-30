@@ -15,6 +15,10 @@ Links gathered while building the generative effects work in this session.
 - [Creating Stunning Particle Systems in p5.js — Eftee Codes](https://efteecodes.medium.com/creating-stunning-particle-systems-in-p5-js-acd30adb4426)
 - [p5.js particle systems example](https://p5js.org/examples/simulate-particles.html)
 
+## Fluid simulation (candidate for thruster exhaust / smoke — not yet implemented)
+
+- [Navier-Stokes fluid simulation explained with Godot — myzopotamia.dev](https://myzopotamia.dev/navier-stokes-fluid-simulation-explained-with-godot) — A walkthrough of Jos Stam's *Stable Fluids* algorithm: a grid-based (Eulerian) Navier-Stokes solver with diffuse → advect → project (Gauss-Seidel pressure solve) steps. The author's demo is a CPU/GDScript implementation at low resolution (16×16 inner grid, 20 relaxation iterations) used for rocket-engine smoke/flame. Candidate technique for a volumetric thruster plume / landing-dust effect in `lander.js`/`sketch.js`; would want a GPU (shader ping-pong) port given our existing shader infra, not the CPU version.
+
 ## Discussed but not yet implemented
 
 Procedural starfield / nebula backdrop was on the shortlist; these are the references for it when we come back to it.

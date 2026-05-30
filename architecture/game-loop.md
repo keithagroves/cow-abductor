@@ -8,7 +8,7 @@ tags: [architecture, game-loop, p5js, sketch]
 
 [../src/sketch.js](../src/sketch.js) is the conductor. It holds the global game
 state, builds the world, runs the per-frame `draw` loop, and owns every visual
-system that isn't an entity or a planet. At ~2400 lines it's the largest file in
+system that isn't an entity or a planet. At ~2500 lines it's the largest file in
 the project; the diagram below groups its functions by responsibility.
 
 ```mermaid
@@ -53,8 +53,8 @@ flowchart TD
   `initializePlants`, `initializeMinerals`, `spawnCluster`, `pickDryAngle`.
 - **Camera** — `view` state, `updateView`, `resetView`, `computeOverviewBox`.
 - **Collision & landing** — `checkCollisions`, `checkSafeLanding`,
-  `isLanderUprightForPlanet`, `getClosestSurfaceDistance`, `getSurfaceRadius`,
-  `distanceToLineSegment`.
+  `isLanderUprightForPlanet`, `getSurfaceDistance`, `getSurfaceRadius`,
+  `getClosestPlanetInfo`, `distanceToLineSegment`.
 - **Effects** — `fireLaser`, burn/splash/crash particle systems, and the
   `getBeamStopPositionRadial` beam geometry.
 - **UI** — `drawHUD`, `drawMinimap`, `drawMissionReadout`, `drawStarField`,
