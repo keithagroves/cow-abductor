@@ -111,6 +111,19 @@ class Planet {
     let baseG = green(this.fillColor);
     let baseB = blue(this.fillColor);
 
+    // The texture is drawn square over the disk [-texR, +texR] (see draw()), so
+    // a pixel's distance from the buffer center maps linearly to world radius.
+    // texR is the top of the noise band, so altitudeFrac runs 0 at the base
+    // surface to 1 at the rim. Because draw() clips the texture to the terrain
+    // polygon, only peaks keep their high-radius pixels — valleys clip away
+    // first — so tinting by altitude paints snow on peaks and darkens basins
+    // without needing to know the silhouette per angle.
+    const texR = this.baseRadius + this.noiseIntensity;
+    const halfSize = SIZE / 2;
+    // Snow band and lowland-darkening thresholds (fractions of the noise band).
+    const SNOW_START = 0.6, SNOW_FULL = 0.92;
+    const LOW_DARK_TOP = 0.35, LOW_DARK_FACTOR = 0.55;
+
     gfx.loadPixels();
     for (let py = 0; py < SIZE; py++) {
       for (let px = 0; px < SIZE; px++) {
@@ -146,6 +159,25 @@ class Planet {
           g = constrain(baseG * factor, 0, 255);
           b = constrain(baseB * factor, 0, 255);
         }
+
+        // Altitude relative to the planet radius. The FBM value jitters the
+        // boundary so the snow line and the dark lowland edge stay ragged
+        // rather than reading as clean concentric rings.
+        let dxc = px - halfSize, dyc = py - halfSize;
+        let worldR = (Math.hypot(dxc, dyc) / halfSize) * texR;
+        let altitude = constrain((worldR - this.baseRadius) / this.noiseIntensity, 0, 1);
+        let ragged = altitude + (n - 0.5) * 0.25;
+
+        // Darken the lowlands so basins read heavier than the mid slopes.
+        let lowDark = constrain(ragged / LOW_DARK_TOP, 0, 1);
+        let darkF = lerp(LOW_DARK_FACTOR, 1.0, lowDark);
+        r *= darkF; g *= darkF; b *= darkF;
+
+        // Snow cap: blend toward a cool white as we approach the rim/peaks.
+        let snow = constrain((ragged - SNOW_START) / (SNOW_FULL - SNOW_START), 0, 1);
+        r = lerp(r, 238, snow);
+        g = lerp(g, 243, snow);
+        b = lerp(b, 250, snow);
 
         let idx = (py * SIZE + px) * 4;
         gfx.pixels[idx]     = r;
