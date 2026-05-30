@@ -681,33 +681,33 @@ class Planet {
     // with the rest of the scene via the same camera-inverse transform).
 
     // Draw snake shapes
-    push();
-    translate(this.center.x, this.center.y);
-    for (let shape of this.snakeShapes) {
-      beginShape();
-      noStroke();
-      fill(shape.color);
+    // push();
+    // translate(this.center.x, this.center.y);
+    // for (let shape of this.snakeShapes) {
+    //   beginShape();
+    //   noStroke();
+    //   fill(shape.color);
       
-      // Draw closed Bézier curve
-      let points = shape.points;
-      vertex(points[0].x, points[0].y);
+    //   // Draw closed Bézier curve
+    //   let points = shape.points;
+    //   vertex(points[0].x, points[0].y);
       
-      for (let i = 0; i < points.length; i++) {
-        let p1 = points[i];
-        let p2 = points[(i + 1) % points.length];
-        let p3 = points[(i + 2) % points.length];
+    //   for (let i = 0; i < points.length; i++) {
+    //     let p1 = points[i];
+    //     let p2 = points[(i + 1) % points.length];
+    //     let p3 = points[(i + 2) % points.length];
         
-        let cp1x = p1.x + (p2.x - p1.x) * 0.5;
-        let cp1y = p1.y + (p2.y - p1.y) * 0.5;
-        let cp2x = p2.x + (p3.x - p2.x) * 0.5;
-        let cp2y = p2.y + (p3.y - p2.y) * 0.5;
+    //     let cp1x = p1.x + (p2.x - p1.x) * 0.5;
+    //     let cp1y = p1.y + (p2.y - p1.y) * 0.5;
+    //     let cp2x = p2.x + (p3.x - p2.x) * 0.5;
+    //     let cp2y = p2.y + (p3.y - p2.y) * 0.5;
         
-        bezierVertex(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
-      }
+    //     bezierVertex(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+    //   }
       
-      endShape(CLOSE);
-    }
-    pop();
+    //   endShape(CLOSE);
+    // }
+    // pop();
 
     // Draw landing pad indicators
     stroke(255, 255, 0);

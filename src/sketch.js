@@ -22,7 +22,7 @@ let splashParticles = [];
 let crashParticles = [];
 let stars = [];
 let cowImage;
-let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0 };
+let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0, userZoom: 1 };
 // Overview/map mode — press M to toggle. Frames the whole solar system
 // (every planet's orbital extent) instead of following the ship.
 let overviewMode = false;
@@ -45,6 +45,15 @@ const CAMERA_FOLLOW_EASE = 0.18;
 // that the horizon swings smoothly as you fly around a planet rather than
 // snapping, high enough that you're upright again within ~a second.
 const CAMERA_ROLL_EASE = 0.08;
+// User zoom (scroll wheel / trackpad pinch) is a multiplier layered on top of
+// the automatic altitude-based framing. 1 = no change; <1 pulls out, >1 zooms
+// in. Clamped so the player can't lose the ship entirely.
+const USER_ZOOM_MIN = 0.25;
+const USER_ZOOM_MAX = 4.0;
+// Per wheel-tick zoom sensitivity. Applied exponentially so each notch is a
+// constant ratio regardless of current zoom; the device's delta magnitude
+// scales it (trackpad pinch sends small deltas, mouse wheel large ones).
+const USER_ZOOM_SENSITIVITY = 0.0015;
 const LANDING_MAX_TILT = 45;
 const DISCOVERY_DISTANCE = 2500;
 const PLANET_NAMES = [
@@ -1553,6 +1562,10 @@ function updateView() {
     targetScale = max(0.02, min(closeScale, framingScale));
   }
 
+  // Layer the player's manual zoom on top of the automatic framing so it
+  // tracks altitude/overview changes relative to where they dialed it.
+  targetScale *= view.userZoom;
+
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;
 
   if (trackShip) {
@@ -2492,4 +2505,23 @@ function mousePressed(event) {
   }
   // PLAYING — click fires the laser at the cursor target.
   fireLaser(mouseX, mouseY);
+}
+
+// Scroll wheel / trackpad pinch adjusts the manual zoom. Browsers translate a
+// trackpad pinch into a wheel event (with ctrlKey set), so the same handler
+// covers both the pinch gesture and a real mouse wheel. Exponential so each
+// step is a constant ratio; clamped to keep the ship on screen. Returning false
+// stops the gesture from also scrolling the page.
+function mouseWheel(event) {
+  // Let the wheel scroll the debug panel instead of zooming when it's hovered.
+  if (event && event.target && (
+    event.target.closest && event.target.closest("#debug-panel")
+  )) return;
+
+  view.userZoom = constrain(
+    view.userZoom * Math.exp(-event.delta * USER_ZOOM_SENSITIVITY),
+    USER_ZOOM_MIN,
+    USER_ZOOM_MAX
+  );
+  return false;
 }
