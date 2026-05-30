@@ -407,13 +407,6 @@ function draw() {
   // outside the PLAYING gate.
   updateCrashParticles(timeScale);
 
-  // Clouds BLEND onto the starfield behind the planets — the planet's surface
-  // covers them where they overlap, so only the limb clouds show. The
-  // atmosphere glow is drawn later (after pop), on top of the planets, so its
-  // additive Rayleigh limb actually brightens the upper atmosphere instead of
-  // being painted over by the planet body and its sky-envelope gradient.
-  drawClouds();
-
   push();
   // Camera transform: rotate + zoom around the focal point (lander), so
   // pressing Q/E rolls the world view without sliding the ship off-screen.
@@ -456,6 +449,12 @@ function draw() {
   // so the bright Rayleigh limb brightens the upper atmosphere as you climb
   // rather than being occluded by the planet body and sky-envelope gradient.
   drawAtmosphere();
+
+  // Clouds — BLEND pass on top of the atmosphere glow (same atmosphere→clouds
+  // order as 2c48f35, so the additive limb glow doesn't wash out the cloud
+  // color) and on top of the planet body + envelope so they're no longer
+  // buried by either. The shader's innerR = baseRadius keeps them a limb band.
+  drawClouds();
 
   // Sun lens flare — screen space, on top of the world so it's never occluded
   // and slides across the view as the camera follows the ship.

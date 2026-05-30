@@ -562,6 +562,46 @@ class Planet {
 
     ctx.restore();
 
+    // Day/night terminator on the surface: darken the hemisphere facing away
+    // from the sun, with a soft terminator that drifts using the same day-cycle
+    // the atmosphere and cloud shaders use (a = frameCount * 0.05 * 0.005), so
+    // the planet's lit side stays in step with the glowing limb. Clipped to the
+    // terrain polygon so only the planet darkens, never the space around it.
+    if (!this.isSun) {
+      let sw = (typeof sunWorldPos === "function")
+        ? sunWorldPos() : { x: this.center.x + 1, y: this.center.y };
+      let sdx = sw.x - this.center.x, sdy = sw.y - this.center.y;
+      let sl = Math.hypot(sdx, sdy) || 1;
+      sdx /= sl; sdy /= sl;
+      let a = (frameCount * 0.05) * 0.005;
+      let ca = Math.cos(a), sa = Math.sin(a);
+      let tx = ca * sdx - sa * sdy; // sun direction, day-cycle rotated
+      let ty = sa * sdx + ca * sdy;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(this.landscape[0].x, this.landscape[0].y);
+      for (let i = 1; i < this.landscape.length; i++) {
+        ctx.lineTo(this.landscape[i].x, this.landscape[i].y);
+      }
+      ctx.closePath();
+      ctx.clip();
+
+      // Linear gradient from the sunlit limb (transparent) across to the night
+      // limb (dark navy). The terminator sits just past center so the day side
+      // stays generous and the transition is soft rather than a hard line.
+      let sunX = this.center.x + tx * texR, sunY = this.center.y + ty * texR;
+      let nightX = this.center.x - tx * texR, nightY = this.center.y - ty * texR;
+      let grad = ctx.createLinearGradient(sunX, sunY, nightX, nightY);
+      grad.addColorStop(0.0, "rgba(6, 10, 30, 0)");
+      grad.addColorStop(0.5, "rgba(6, 10, 30, 0)");
+      grad.addColorStop(0.64, "rgba(6, 10, 30, 0.4)");
+      grad.addColorStop(1.0, "rgba(4, 7, 22, 0.8)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(this.center.x - texR, this.center.y - texR, texR * 2, texR * 2);
+      ctx.restore();
+    }
+
     // Shoreline rim — bright line at rSea, only along landscape segments
     // whose terrain dips below sea level (the visible water-meets-sky arcs).
     // Anywhere terrain rises above rSea the rim is hidden behind the texture
