@@ -1534,13 +1534,23 @@ function updateView() {
   } else {
     let surfaceDistance = getClosestSurfaceDistance();
     let clampedDistance = constrain(surfaceDistance, 0, DEBUG.cameraZoomDistance);
-    targetScale = map(
+    // Close-range zoom: tight near the surface, easing out to cameraMinZoom by
+    // cameraZoomDistance — the normal gameplay framing.
+    let closeScale = map(
       clampedDistance,
       0,
       DEBUG.cameraZoomDistance,
       DEBUG.cameraMaxZoom,
       DEBUG.cameraMinZoom
     );
+    // High above a surface (the opening descent) pull the camera back so the
+    // planet stays framed ~40% down the screen instead of the ship falling
+    // through empty space. min() means this only takes over once you're high
+    // enough that closeScale would push the surface off-screen; near the ground
+    // closeScale wins and normal gameplay framing is unchanged. The floor keeps
+    // the planet a sensible size at extreme altitude.
+    let framingScale = (height * 0.4) / max(1, surfaceDistance);
+    targetScale = max(0.02, min(closeScale, framingScale));
   }
 
   view.scale += (targetScale - view.scale) * CAMERA_ZOOM_EASE;

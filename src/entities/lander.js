@@ -142,16 +142,16 @@ class Lander {
   // away from the planet so W thrusts against the fall), with a gentle inward
   // velocity so it reads as already descending when play begins.
   spawnAbovePlanet(planet, angle) {
-    // Start the descent a controllable height above the surface — high enough to
-    // read as dropping in, but close enough that the planet stays on screen. The
-    // atmosphere shell is several planet-radii thick, so spawning at its outer
-    // edge put the ship tens of thousands of px away with nothing visible and
-    // forced a camera zoom-out that washed the screen white.
+    // Spawn just outside the atmosphere shell for a dramatic high descent. The
+    // camera pulls back at altitude (see updateView) so the planet stays framed
+    // the whole way down instead of the ship falling through empty black space.
     let surfaceR = (typeof getSurfaceRadius === "function")
       ? getSurfaceRadius(planet, angle)
       : planet.baseRadius;
-    let altitude = DEBUG.cameraZoomDistance * 1.2; // just past the zoom-out range
-    let r = surfaceR + altitude;
+    let outer = planet.atmosphereOuterRadius
+      ? planet.atmosphereOuterRadius()
+      : surfaceR * 1.6;
+    let r = max(outer * 1.08, surfaceR + 1000);
     this.pos.set(
       planet.center.x + r * cos(angle),
       planet.center.y + r * sin(angle)
