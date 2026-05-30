@@ -770,7 +770,7 @@ function updateWorld(timeScale = 1) {
   // dissipates; inject only while the engine is firing and there's fuel.
   if (DEBUG.fluidPlume) {
     let firing = lander.active && lander.thrusting > 0 && lander.fuel > 0;
-    updatePlumeFluid(firing ? lander.thrusting : 0);
+    updatePlumeFluid(firing ? lander.thrusting : 0, getPlumeGround());
   }
   updateWaterInteraction(timeScale);
   updateSplashParticles(timeScale);
@@ -1651,6 +1651,48 @@ function getClosestPlanetInfo() {
   }
 
   return { planet: closest, surfaceDistance: closestDistance };
+}
+
+// Build the ground half-plane the experimental GPU fluid plume collides
+// against: the planet surface directly under the engine nozzle, expressed as a
+// world point + outward normal (plus the nozzle's altitude). The plume sim maps
+// this into its local grid. Returns null when there's nothing solid below.
+function getPlumeGround() {
+  if (!lander || !lander.active) return null;
+  let { planet } = getClosestPlanetInfo();
+  if (!planet || planet.isSun) return null;
+  let nozzle = lander.localToWorld(0, 21);
+  let dx = nozzle.x - planet.center.x;
+  let dy = nozzle.y - planet.center.y;
+  let dist = sqrt(dx * dx + dy * dy);
+  if (dist === 0) return null;
+  let angle = atan2(dy, dx);            // degrees (angleMode DEGREES)
+  if (angle < 0) angle += 360;
+  let surfR = getSurfaceRadius(planet, angle);
+
+  // Local terrain normal from the actual landscape slope (not the radial
+  // sphere normal) so the wall tilts with hills. Sample the surface a couple
+  // degrees either side and take the perpendicular of that tangent.
+  let dA = 2;
+  let a0 = angle - dA; if (a0 < 0) a0 += 360;
+  let a1 = angle + dA; if (a1 >= 360) a1 -= 360;
+  let r0 = getSurfaceRadius(planet, a0);
+  let r1 = getSurfaceRadius(planet, a1);
+  let p0x = planet.center.x + r0 * cos(a0), p0y = planet.center.y + r0 * sin(a0);
+  let p1x = planet.center.x + r1 * cos(a1), p1y = planet.center.y + r1 * sin(a1);
+  let nx = p1y - p0y, ny = -(p1x - p0x);  // perpendicular to the tangent
+  if (nx * dx + ny * dy < 0) { nx = -nx; ny = -ny; }  // point outward (away from core)
+  let nm = sqrt(nx * nx + ny * ny) || 1;
+  nx /= nm; ny /= nm;
+
+  return {
+    nozzle,
+    angleDeg: lander.rotation,
+    px: planet.center.x + (dx / dist) * surfR,  // surface foot under the nozzle
+    py: planet.center.y + (dy / dist) * surfR,
+    nx, ny,                                      // local terrain normal
+    dist: dist - surfR,                          // nozzle altitude above surface
+  };
 }
 
 function getSurfaceDistance(position, planet) {

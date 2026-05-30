@@ -60,7 +60,8 @@ flowchart TD
 - **Effects** — `fireLaser`, burn/splash/crash particle systems, and the
   `getBeamStopPositionRadial` beam geometry. The loop also drives the
   experimental GPU fluid plume (`updatePlumeFluid`/`drawPlumeFluid`) anchored at
-  the lander's nozzle.
+  the lander's nozzle, with `getPlumeGround` feeding the planet surface in as a
+  collision wall so the exhaust splays along the ground.
 - **UI** — `drawHUD`, `drawMinimap`, `drawMissionReadout`, `drawStarField`,
   `pickConstellation`, `drawNavTargetIndicator`, `drawGameStateMessages`.
 - **State machine** — `startGame`, `resetGame`, `liftOff`, `tryDeliver`,

@@ -16,7 +16,9 @@
 // default and this is purely an additive experiment.
 
 const FLUID_GRID = 128;          // sim resolution (cells per side)
-const FLUID_PRESSURE_ITERS = 24; // Jacobi relaxation passes per frame
+const FLUID_PRESSURE_ITERS = 40; // Jacobi relaxation passes per frame (higher =
+                                 // pressure propagates further, so the exhaust
+                                 // turns and splays harder against the ground)
 const FLUID_INLET = [0.5, 0.80]; // nozzle position in grid texcoords
 const FLUID_INLET_RADIUS = 0.018; // Gaussian splat radius² scale
 
@@ -40,6 +42,18 @@ void main() {
 // field by one step and resample (bilinear, via LINEAR-filtered FBOs). Used for
 // both velocity (self-advection) and the smoke density, with a dissipation
 // factor so the field decays instead of accumulating forever.
+// Shared GLSL: an analytic "ground" half-plane the exhaust collides with. The
+// JS side maps the world surface under the nozzle into this grid's UV space as
+// a point + outward normal; cells on the far side of the plane are solid wall.
+const FLUID_GROUND_GLSL = `
+uniform float u_groundActive;   // 0 = no ground in range, 1 = active
+uniform vec2  u_groundPoint;    // a point on the surface, grid UV
+uniform vec2  u_groundNormal;   // unit outward normal, grid UV (into the gas)
+bool solid(vec2 uv) {
+  return u_groundActive > 0.5 && dot(uv - u_groundPoint, u_groundNormal) < 0.0;
+}
+`;
+
 const FLUID_ADVECT_FRAG = `
 precision highp float;
 varying vec2 vUv;
@@ -51,7 +65,10 @@ uniform float u_dissipation;
 uniform float u_edgeFade;      // >0.5: bleed the quantity to 0 near the borders
                                // (an outflow sink so the smoke doesn't fill the
                                // closed box). 0 for velocity self-advection.
+${FLUID_GROUND_GLSL}
 void main() {
+  // Inside the ground the field is nothing — gas can't occupy solid cells.
+  if (solid(vUv)) { gl_FragColor = vec4(0.0); return; }
   vec2 vel = texture2D(u_velocity, vUv).xy;
   vec2 back = vUv - u_dt * vel * u_texel;
   float fade = 1.0;
@@ -90,11 +107,18 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D u_velocity;
 uniform float u_texel;
+${FLUID_GROUND_GLSL}
 void main() {
-  float l = texture2D(u_velocity, vUv - vec2(u_texel, 0.0)).x;
-  float r = texture2D(u_velocity, vUv + vec2(u_texel, 0.0)).x;
-  float b = texture2D(u_velocity, vUv - vec2(0.0, u_texel)).y;
-  float t = texture2D(u_velocity, vUv + vec2(0.0, u_texel)).y;
+  vec2 cl = vUv - vec2(u_texel, 0.0);
+  vec2 cr = vUv + vec2(u_texel, 0.0);
+  vec2 cb = vUv - vec2(0.0, u_texel);
+  vec2 ct = vUv + vec2(0.0, u_texel);
+  // No-slip wall: a solid neighbour contributes zero velocity, so the divergence
+  // spikes where flow is blocked and the pressure solve pushes it sideways.
+  float l = solid(cl) ? 0.0 : texture2D(u_velocity, cl).x;
+  float r = solid(cr) ? 0.0 : texture2D(u_velocity, cr).x;
+  float b = solid(cb) ? 0.0 : texture2D(u_velocity, cb).y;
+  float t = solid(ct) ? 0.0 : texture2D(u_velocity, ct).y;
   float div = 0.5 * ((r - l) + (t - b));
   gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
 }
@@ -108,11 +132,19 @@ varying vec2 vUv;
 uniform sampler2D u_pressure;
 uniform sampler2D u_divergence;
 uniform float u_texel;
+${FLUID_GROUND_GLSL}
 void main() {
-  float l = texture2D(u_pressure, vUv - vec2(u_texel, 0.0)).x;
-  float r = texture2D(u_pressure, vUv + vec2(u_texel, 0.0)).x;
-  float b = texture2D(u_pressure, vUv - vec2(0.0, u_texel)).x;
-  float t = texture2D(u_pressure, vUv + vec2(0.0, u_texel)).x;
+  vec2 cl = vUv - vec2(u_texel, 0.0);
+  vec2 cr = vUv + vec2(u_texel, 0.0);
+  vec2 cb = vUv - vec2(0.0, u_texel);
+  vec2 ct = vUv + vec2(0.0, u_texel);
+  float c = texture2D(u_pressure, vUv).x;
+  // Neumann at the wall: a solid neighbour mirrors the centre pressure (zero
+  // gradient across the wall).
+  float l = solid(cl) ? c : texture2D(u_pressure, cl).x;
+  float r = solid(cr) ? c : texture2D(u_pressure, cr).x;
+  float b = solid(cb) ? c : texture2D(u_pressure, cb).x;
+  float t = solid(ct) ? c : texture2D(u_pressure, ct).x;
   float div = texture2D(u_divergence, vUv).x;
   float p = (l + r + b + t - div) * 0.25;
   gl_FragColor = vec4(p, 0.0, 0.0, 1.0);
@@ -126,11 +158,19 @@ varying vec2 vUv;
 uniform sampler2D u_pressure;
 uniform sampler2D u_velocity;
 uniform float u_texel;
+${FLUID_GROUND_GLSL}
 void main() {
-  float l = texture2D(u_pressure, vUv - vec2(u_texel, 0.0)).x;
-  float r = texture2D(u_pressure, vUv + vec2(u_texel, 0.0)).x;
-  float b = texture2D(u_pressure, vUv - vec2(0.0, u_texel)).x;
-  float t = texture2D(u_pressure, vUv + vec2(0.0, u_texel)).x;
+  // Inside the wall there is no flow.
+  if (solid(vUv)) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  vec2 cl = vUv - vec2(u_texel, 0.0);
+  vec2 cr = vUv + vec2(u_texel, 0.0);
+  vec2 cb = vUv - vec2(0.0, u_texel);
+  vec2 ct = vUv + vec2(0.0, u_texel);
+  float c = texture2D(u_pressure, vUv).x;
+  float l = solid(cl) ? c : texture2D(u_pressure, cl).x;
+  float r = solid(cr) ? c : texture2D(u_pressure, cr).x;
+  float b = solid(cb) ? c : texture2D(u_pressure, cb).x;
+  float t = solid(ct) ? c : texture2D(u_pressure, ct).x;
   vec2 vel = texture2D(u_velocity, vUv).xy;
   vel -= 0.5 * vec2(r - l, t - b);
   gl_FragColor = vec4(vel, 0.0, 1.0);
@@ -158,7 +198,7 @@ void main() {
   // reaches the borders.
   vec2 e = min(vUv, 1.0 - vUv);
   float edge = smoothstep(0.0, 0.16, e.x) * smoothstep(0.0, 0.16, e.y);
-  float alpha = clamp(d * 0.85, 0.0, 1.0) * edge;
+  float alpha = clamp(d * 1.25, 0.0, 1.0) * edge;
   gl_FragColor = vec4(col * alpha, alpha);
 }
 `;
@@ -234,11 +274,47 @@ function fluidPass(shader, target, uniforms) {
 
 const FLUID_TEXEL = 1.0 / FLUID_GRID;
 
+// Map the world-space ground under the nozzle into the sim's local UV space as a
+// half-plane (a point + outward normal). `ground` is built by the game loop:
+//   { nozzle:{x,y}, angleDeg, px,py (surface point), nx,ny (outward normal),
+//     dist (surface distance from nozzle) }
+// The plume quad is drawn with the same translate(nozzle)+rotate(angle) frame
+// and spans `worldSize` per UV unit, with the inlet at FLUID_INLET and the flow
+// running toward smaller v — so world->UV is: rotate into ship-local, then
+// u = 0.5 + localX/worldSize, v = FLUID_INLET.y - localY/worldSize.
+function plumeGroundUniforms(ground) {
+  const off = { u_groundActive: 0.0, u_groundPoint: [0.0, 0.0], u_groundNormal: [0.0, 1.0] };
+  if (!ground) return off;
+  let worldSize = DEBUG.fluidPlumeScale;
+  // Only engage once the ground is within the plume's reach, else it never
+  // touches and we save the branch.
+  if (ground.dist > worldSize) return off;
+
+  let c = cos(ground.angleDeg);   // p5 angleMode(DEGREES) — matches localToWorld
+  let s = sin(ground.angleDeg);
+  // world delta -> ship-local (inverse rotation): Lx = vx*c + vy*s, Ly = -vx*s + vy*c
+  let vx = ground.px - ground.nozzle.x;
+  let vy = ground.py - ground.nozzle.y;
+  let lx = vx * c + vy * s;
+  let ly = -vx * s + vy * c;
+  let point = [0.5 + lx / worldSize, FLUID_INLET[1] - ly / worldSize];
+
+  // Normal is rotation-only; the UV v-axis is flipped vs local y, so v-component
+  // negates. Normalize for the dot-product half-plane test.
+  let lnx = ground.nx * c + ground.ny * s;
+  let lny = -ground.nx * s + ground.ny * c;
+  let ux = lnx, uy = -lny;
+  let m = Math.hypot(ux, uy) || 1.0;
+  return { u_groundActive: 1.0, u_groundPoint: point, u_groundNormal: [ux / m, uy / m] };
+}
+
 // Advance the simulation one step. `thrust` is 0..1 (lander.thrustLevel); the
 // inlet only injects while the engine is firing, but the field keeps evolving
-// so the tail dissipates naturally after cutoff.
-function updatePlumeFluid(thrust) {
+// so the tail dissipates naturally after cutoff. `ground` (optional) collides
+// the exhaust with the planet surface.
+function updatePlumeFluid(thrust, ground) {
   if (!fluidGfx) return;
+  let g = plumeGroundUniforms(ground);
 
   // Every sim pass writes a full-screen quad that must OVERWRITE the target
   // framebuffer, not blend over it. p5's default WEBGL blend is BLEND
@@ -253,7 +329,7 @@ function updatePlumeFluid(thrust) {
   fluidPass(fluidShaders.advect, fluidFB.velocity.b, {
     u_src: fluidFB.velocity.a,
     u_velocity: fluidFB.velocity.a,
-    u_texel: FLUID_TEXEL, u_dt: 1.0, u_dissipation: 0.97, u_edgeFade: 0.0,
+    u_texel: FLUID_TEXEL, u_dt: 1.0, u_dissipation: 0.97, u_edgeFade: 0.0, ...g,
   });
   fluidFB.velocity.swap();
 
@@ -270,13 +346,13 @@ function updatePlumeFluid(thrust) {
     });
     fluidFB.velocity.swap();
 
-    // Density injection is deliberately small: with ~6% per-frame dissipation
-    // below, an inject of 0.10 settles to a steady-state core density near
-    // 0.10/(1-0.94) ≈ 1.7 instead of saturating the whole grid white.
+    // Density injection is kept modest so the field doesn't saturate the whole
+    // grid white; with ~7.5% per-frame dissipation below, 0.16 settles to a
+    // steady-state core near 0.16/(1-0.925) ≈ 2.1 — bright but not a solid box.
     fluidPass(fluidShaders.splat, fluidFB.density.b, {
       u_src: fluidFB.density.a,
       u_point: FLUID_INLET,
-      u_value: [0.10 * thrust, 0.0, 0.0, 0.0],
+      u_value: [0.16 * thrust, 0.0, 0.0, 0.0],
       u_radius: FLUID_INLET_RADIUS, u_aspect: 1.0,
     });
     fluidFB.density.swap();
@@ -284,7 +360,7 @@ function updatePlumeFluid(thrust) {
 
   // 3) Projection: divergence -> Jacobi pressure solve -> subtract gradient.
   fluidPass(fluidShaders.divergence, fluidFB.divergence, {
-    u_velocity: fluidFB.velocity.a, u_texel: FLUID_TEXEL,
+    u_velocity: fluidFB.velocity.a, u_texel: FLUID_TEXEL, ...g,
   });
 
   // Clear pressure before relaxing (zero initial guess).
@@ -293,7 +369,7 @@ function updatePlumeFluid(thrust) {
     fluidPass(fluidShaders.jacobi, fluidFB.pressure.b, {
       u_pressure: fluidFB.pressure.a,
       u_divergence: fluidFB.divergence,
-      u_texel: FLUID_TEXEL,
+      u_texel: FLUID_TEXEL, ...g,
     });
     fluidFB.pressure.swap();
   }
@@ -301,7 +377,7 @@ function updatePlumeFluid(thrust) {
   fluidPass(fluidShaders.gradient, fluidFB.velocity.b, {
     u_pressure: fluidFB.pressure.a,
     u_velocity: fluidFB.velocity.a,
-    u_texel: FLUID_TEXEL,
+    u_texel: FLUID_TEXEL, ...g,
   });
   fluidFB.velocity.swap();
 
@@ -311,7 +387,7 @@ function updatePlumeFluid(thrust) {
   fluidPass(fluidShaders.advect, fluidFB.density.b, {
     u_src: fluidFB.density.a,
     u_velocity: fluidFB.velocity.a,
-    u_texel: FLUID_TEXEL, u_dt: 1.0, u_dissipation: 0.925, u_edgeFade: 1.0,
+    u_texel: FLUID_TEXEL, u_dt: 1.0, u_dissipation: 0.925, u_edgeFade: 1.0, ...g,
   });
   fluidFB.density.swap();
 
