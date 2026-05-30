@@ -1,12 +1,13 @@
 // Per-planet atmosphere shader. A deliberately simple 2D model: for each
 // screen pixel we find the planet it falls over (in world space, via the
-// camera transform from sketch.js) and shade the slab between baseRadius and
-// the outer edge. The glow lives in a Gaussian band floating at altitude
-// BAND_CENTER, so it reads as a bright arc — part of the big circle girdling
-// the planet — that the ship flies up through and leaves floating in black
-// space as it climbs. The lit band reads blue; warm orange appears only at the
-// sunset terminator. No raymarching or physical scattering; just a floating
-// band shaded by the sun direction.
+// camera transform from sketch.js) and shade the slab between the terrain
+// envelope and the outer edge. The glow lives in a tight Gaussian band
+// floating at altitude 0.55 (above the highest peaks), so it reads as a
+// floating circular shell — an arc overhead near the surface, a full ring
+// once you climb past it and leave it floating in black space. The lit band
+// reads blue (Rayleigh); warm orange (Mie) appears only at the sunset
+// terminator. No raymarching or physical scattering; just a floating band
+// shaded by the sun direction.
 
 const ATMO_MAX_PLANETS = 10;
 
@@ -42,19 +43,6 @@ uniform vec3 u_atmoColor[MAX_PLANETS];
 uniform vec2 u_sunPos;
 uniform float u_time;
 
-// Aerial-perspective limb model (the Shuttle-photo look): the atmosphere is
-// densest at the surface and fades into black space with altitude, and its
-// color is stratified by altitude — warm orange low down, grading to the
-// planet's blue higher up. Seen edge-on at the limb this reads as the classic
-// dark-orange → blue → black banding.
-const float BAND_CENTER = 0.50;  // altitude of the glowing band (0=surface,1=top)
-const float BAND_WIDTH  = 0.22;  // band thickness — the arc you fly up through
-const vec3  WARM_COLOR  = vec3(1.0, 0.5, 0.22); // sunset-rim orange
-const float BRIGHTNESS  = 1.9;
-const float SUNSET_K    = 0.8;   // sunset orange strength at the terminator
-const float HAZE_K      = 0.18;  // slight paleness of the band
-const float NIGHT_FLOOR = 0.12;  // dark side dims to this, never to black
-
 void main() {
   // p5 P2D canvas is y-down; vTexCoord.y from the WEBGL buffer is y-up, and
   // image() doesn't flip on blit. Flip Y here so the pixel coords match the
@@ -79,16 +67,17 @@ void main() {
     float dist = length(d);
     if (dist >= ra || dist <= r) continue;
 
-    // Altitude 0 (surface) .. 1 (outer edge).
+    // Altitude through the atmosphere: 0 at the terrain envelope, 1 at the
+    // outer edge.
     float h = (dist - r) / max(ra - r, 0.0001);
-    // A glowing band floating at altitude BAND_CENTER, fading to ~0 both above
-    // and below. It reads as a bright arc — part of the huge circle girdling
-    // the planet — that you fly up through; climb past it and the arc floats
-    // off into the black space below.
-    float band = exp(-pow((h - BAND_CENTER) / BAND_WIDTH, 2.0));
+    // Tight Gaussian band so the glow only appears as a thin floating shell
+    // near altitude 0.55, fading off both inward (toward the planet) and
+    // outward (into space). You fly up through it and it floats off below.
+    float density = exp(-pow((h - 0.55) / 0.18, 2.0));
 
     // Sun direction, slowly rotated so the terminator drifts (cosmetic day
-    // cycle; matches the clouds' rotation).
+    // cycle; matches the clouds' rotation and the flare anchor in
+    // flareSourceWorld).
     vec2 outward = d / max(dist, 0.0001);
     vec2 toSunRaw = normalize(u_sunPos - pc);
     float a = u_time * 0.005;
@@ -96,23 +85,20 @@ void main() {
                       sin(a) * toSunRaw.x + cos(a) * toSunRaw.y);
     float sunDot = dot(outward, toSun);
 
-    // One smoothstep across the terminator → soft day/night, no abrupt line.
-    float day = smoothstep(-0.25, 0.3, sunDot);
-    // Warmth that peaks right at the terminator, on the lit side only.
-    float sunset = exp(-sunDot * sunDot * 7.0) * day;
+    // Day/night with a soft terminator a few degrees wide.
+    float dayNight = smoothstep(-0.15, 0.25, sunDot);
 
-    // Blue band (slightly pale); warm orange only at the sunset terminator.
-    vec3 skyCol = mix(u_atmoColor[i], vec3(1.0), HAZE_K);
-    vec3 litColor = mix(skyCol, WARM_COLOR, clamp(sunset * SUNSET_K, 0.0, 1.0));
+    // Rayleigh — the planet's sky color, brightest on the lit side.
+    vec3 rayleigh = u_atmoColor[i] * dayNight * density * 0.6;
 
-    // Day side is the lit band; night side keeps a faint same-hue glow.
-    vec3 col = mix(u_atmoColor[i] * NIGHT_FLOOR, litColor, day);
+    // Mie / sunset — peaks at the terminator, day side only.
+    float terminator = exp(-pow(sunDot * 1.6, 2.0) * 6.0);
+    vec3 mieColor = vec3(1.5, 0.55, 0.2) * terminator * density * dayNight * 0.5;
 
-    accum += col * band * BRIGHTNESS;
+    accum += rayleigh + mieColor;
   }
 
-  // Soft rolloff so nothing hard-clips to flat white.
-  accum = vec3(1.0) - exp(-accum);
+  accum = min(accum, vec3(1.2));
   gl_FragColor = vec4(accum, 1.0);
 }
 `;
@@ -172,11 +158,14 @@ function drawAtmosphere() {
     if (p.isSun) continue;
     if (!p.hasAtmosphere || !p.hasAtmosphere()) continue;
     positions.push(p.center.x, p.center.y);
-    // Inner edge at baseRadius (the planet's baseline before mountains).
-    // The planet polygon draws on top of the atmosphere, so peaks naturally
-    // mask the band where they rise — but in valleys the sky reaches all
-    // the way down to the surface instead of stopping at peak altitude.
-    radii.push(p.baseRadius);
+    // Use the terrain's outer envelope (baseRadius + noiseIntensity) so the
+    // shader's glow ring starts above the highest peaks and doesn't bleed
+    // into pixels already covered by the noise-textured planet body.
+    let effectiveR = Math.min(
+      p.baseRadius + p.noiseIntensity,
+      p.atmosphereOuterRadius() * 0.95
+    );
+    radii.push(effectiveR);
     atmoRadii.push(p.atmosphereOuterRadius());
     let sky = planetSkyColor(p);
     colors.push(sky[0], sky[1], sky[2]);
@@ -225,11 +214,14 @@ function sunWorldPos() {
 }
 
 // Where the lens flare originates. Not the far-off sun itself, but the
-// brightest point of the nearby planet's atmosphere — its sunward limb, at the
-// outer edge of the bright band — so the flare reads as glinting off the
+// brightest point of the nearby planet's atmosphere — the center of the lit
+// Rayleigh band on its sunward limb — so the flare reads as glinting off the
 // glowing edge rather than from empty space. Returns a world point.
 function flareSourceWorld() {
-  const FLARE_EDGE = 0.45; // 0 = surface, 1 = atmosphere top
+  // Altitude of the flare within the atmosphere slab. Matches the Rayleigh
+  // band center in ATMO_FRAG (exp(-pow((h - 0.55)/0.18, 2))) so the flare sits
+  // exactly on the brightest point of the glow. Keep in sync with that 0.55.
+  const FLARE_EDGE = 0.55; // 0 = inner envelope, 1 = atmosphere top
 
   // Prefer the body the ship is closest to; else the atmosphered planet
   // nearest the current view focus.
@@ -260,8 +252,11 @@ function flareSourceWorld() {
   let rx = ca * dx - sa * dy;
   let ry = sa * dx + ca * dy;
 
-  let inner = p.baseRadius;
+  // Inner edge of the slab — the terrain envelope, matching the effectiveR the
+  // shader uses in drawAtmosphere so the flare's altitude lines up with the
+  // shader band instead of being measured from baseRadius.
   let outer = p.atmosphereOuterRadius();
+  let inner = Math.min(p.baseRadius + p.noiseIntensity, outer * 0.95);
   let R = inner + FLARE_EDGE * (outer - inner);
   return { x: p.center.x + rx * R, y: p.center.y + ry * R };
 }

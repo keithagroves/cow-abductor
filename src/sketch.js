@@ -407,12 +407,11 @@ function draw() {
   // outside the PLAYING gate.
   updateCrashParticles(timeScale);
 
-  // Atmosphere glow goes down first (ADD on the starfield), then clouds
-  // BLEND on top of it. Both are behind the planet — the planet's surface
-  // covers them where they overlap, so only the limb portion of each
-  // shows. Order matters: clouds on top of atmosphere keeps the cloud
-  // color from being washed out by the additive limb glow.
-  drawAtmosphere();
+  // Clouds BLEND onto the starfield behind the planets — the planet's surface
+  // covers them where they overlap, so only the limb clouds show. The
+  // atmosphere glow is drawn later (after pop), on top of the planets, so its
+  // additive Rayleigh limb actually brightens the upper atmosphere instead of
+  // being painted over by the planet body and its sky-envelope gradient.
   drawClouds();
 
   push();
@@ -452,6 +451,11 @@ function draw() {
   updateAndDrawLasers(timeScale);
 
   pop();
+
+  // Atmosphere glow — additive overlay on top of the world (matches f797526),
+  // so the bright Rayleigh limb brightens the upper atmosphere as you climb
+  // rather than being occluded by the planet body and sky-envelope gradient.
+  drawAtmosphere();
 
   // Sun lens flare — screen space, on top of the world so it's never occluded
   // and slides across the view as the camera follows the ship.

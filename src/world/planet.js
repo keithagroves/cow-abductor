@@ -475,10 +475,30 @@ class Planet {
       }
     }
 
-    // Atmosphere is handled entirely by the shader in atmosphere.js so the
-    // day side gets a lit sky and the night side stays dark (starfield
-    // visible). A rotationally-symmetric gradient here would paint blue
-    // everywhere and defeat the terminator.
+    // Soft sky envelope: a radial blue gradient, opaque sky-blue just above the
+    // terrain (covered by the planet body on the inside) and fading to fully
+    // transparent at the outer edge. Drawn before the planet body so the opaque
+    // inner disk only shows as a ring around the surface. This fills the slab
+    // beneath the shader's bright arc/ring (atmosphere.js) so the planet reads
+    // as having a full atmosphere instead of a thin band floating in space.
+    // Note: it's rotationally symmetric, so it tints the night side blue too;
+    // the shader still supplies the lit arc and sunset terminator on top.
+    if (this.hasAtmosphere()) {
+      let outer = this.atmosphereOuterRadius();
+      let bandThickness = max(80, this.baseRadius * 0.05) * DEBUG.atmosphereInnerBand;
+      let opaqueInner = this.baseRadius + this.noiseIntensity + bandThickness;
+      let cx = this.center.x;
+      let cy = this.center.y;
+
+      let ctx = drawingContext;
+      let grad = ctx.createRadialGradient(cx, cy, opaqueInner, cx, cy, outer);
+      grad.addColorStop(0, "rgba(120, 180, 230, 1)");
+      grad.addColorStop(1, "rgba(140, 200, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
 // Background ridge — distant-mountain silhouette painted in atmospheric
     // haze, drawn before the main terrain so its peaks read as horizon hills
