@@ -316,7 +316,7 @@ function runAllSimulations() {
   SIM_LINES.length = 0;
   simLog(`debug snapshot:`);
   simLog(`  thrust=${DEBUG.thrust}  maxFuel=${DEBUG.maxFuel}`);
-  simLog(`  planetRadiusScale=${DEBUG.planetRadiusScale}  planetGravity=${DEBUG.planetGravity}  planetSpacing=${DEBUG.planetSpacing}`);
+  simLog(`  planetRadiusScale=${DEBUG.planetRadiusScale}  planetDensity=${DEBUG.planetDensity}  planetSpacing=${DEBUG.planetSpacing}`);
   simLog(`  atmosphereScale=${DEBUG.atmosphereScale}  atmosphereDrag=${DEBUG.atmosphereDrag}`);
   simLog(`  orbitSpeedScale=${DEBUG.orbitSpeedScale}`);
 

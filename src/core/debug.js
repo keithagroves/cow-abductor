@@ -4,7 +4,7 @@ const DEBUG = {
   beamRange: 300,
   beamWidth: 20,
   planetRadiusScale: 4.0,
-  planetGravity: 125000000,
+  planetDensity: 0.03,
   planetSpacing: 14000,
   orbitSpeedScale: 0, // 0 freezes orbits, 1 = baseline random speeds
   pullStrength: 0.15,
@@ -33,7 +33,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 12;
+const DEBUG_VERSION = 13;
 
 function loadDebugFromStorage() {
   try {
@@ -68,7 +68,7 @@ const DEBUG_PARAMS = [
   { key: "beamRange",         label: "Beam Range",        min: 50,   max: 800,  step: 10,    live: true,  apply: (v) => { lander.beamRange = v; } },
   { key: "beamWidth",         label: "Beam Width",        min: 5,    max: 200,  step: 1,     live: true,  apply: (v) => { lander.beamWidth = v; } },
   { key: "pullStrength",      label: "Cow Pull",          min: 0.02, max: 0.5,  step: 0.01,  live: true,  apply: (v) => { for (let c of cows) c.pullStrength = v; } },
-  { key: "planetGravity",     label: "Planet Gravity",    min: 1000000, max: 500000000, step: 1000000, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.gravity = v; } },
+  { key: "planetDensity",     label: "Planet Density",    min: 0.005, max: 0.2, step: 0.005, live: true, apply: (v) => { for (let p of planets) if (!p.isSun) p.setDensity(v); } },
   { key: "planetRadiusScale", label: "Planet Size ×",     min: 0.5,  max: 10.0, step: 0.1,   live: false },
   { key: "planetSpacing",     label: "Planet Spacing",    min: 1500, max: 40000, step: 200,  live: false },
   { key: "orbitSpeedScale",   label: "Orbit Speed ×",     min: 0,    max: 2,    step: 0.05,  live: true },

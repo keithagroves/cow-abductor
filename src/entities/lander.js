@@ -137,6 +137,38 @@ class Lander {
     this.active = true;
   }
 
+  // Drop the ship in from space: position it just outside the planet's
+  // atmosphere at `angle`, oriented for a retro-burn descent (ship "top" points
+  // away from the planet so W thrusts against the fall), with a gentle inward
+  // velocity so it reads as already descending when play begins.
+  spawnAbovePlanet(planet, angle) {
+    // Start the descent a controllable height above the surface — high enough to
+    // read as dropping in, but close enough that the planet stays on screen. The
+    // atmosphere shell is several planet-radii thick, so spawning at its outer
+    // edge put the ship tens of thousands of px away with nothing visible and
+    // forced a camera zoom-out that washed the screen white.
+    let surfaceR = (typeof getSurfaceRadius === "function")
+      ? getSurfaceRadius(planet, angle)
+      : planet.baseRadius;
+    let altitude = DEBUG.cameraZoomDistance * 1.2; // just past the zoom-out range
+    let r = surfaceR + altitude;
+    this.pos.set(
+      planet.center.x + r * cos(angle),
+      planet.center.y + r * sin(angle)
+    );
+    // Inward unit vector (toward the planet) plus the planet's orbital motion so
+    // the ship falls with the world instead of being swept off it.
+    let inwardX = -cos(angle);
+    let inwardY = -sin(angle);
+    let orb = planet.getOrbitalVelocity ? planet.getOrbitalVelocity() : { x: 0, y: 0 };
+    let descendSpeed = 3;
+    this.vel.set(orb.x + inwardX * descendSpeed, orb.y + inwardY * descendSpeed);
+    // Same orientation rule as spawnOnPlanet: ship top points radially outward.
+    this.rotation = this.targetRotation = angle + 90;
+    this.nearestPlanet = planet;
+    this.active = true;
+  }
+
   applyGravityToVelocity(velocity, position, timeScale = 1) {
     let gravityX = 0;
     let gravityY = 0;

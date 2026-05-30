@@ -1,3 +1,11 @@
+// Radius at which a planet's `density` equals its surface gravity directly.
+// Surface gravity scales linearly with radius around this point (see
+// setDensity), so a planet twice this size pulls twice as hard at its surface,
+// and a small moon pulls correspondingly less. This is the inverse of a naive
+// fixed-GM model, where shrinking a planet would crank up surface gravity
+// because the ground sits closer to the center.
+const GRAVITY_REFERENCE_RADIUS = 8000;
+
 class Planet {
   constructor(center, baseRadius, noiseIntensity, numPoints, density, orbitRadius,sun) {
   
@@ -12,7 +20,9 @@ class Planet {
     // the base color, so a single tint keeps things consistent.
     this.strokeColor = color(75, 72, 70);
     this.fillColor   = color(110, 105, 100);
-    this.gravity = density;
+    // Derive the GM term from density + size so surface gravity scales with the
+    // planet's radius instead of spiking on small bodies.
+    this.setDensity(density);
    // Add orbital parameters
     if(this.center.x !== sun.x || this.center.y !== sun.y){
     this.orbitRadius = orbitRadius  // Distance from orbit center
@@ -47,6 +57,17 @@ class Planet {
     // an atmospheric-haze color so its peaks read as distant mountains behind
     // the foreground silhouette (Hollow-Knight-style depth on the ground).
     this.backgroundRidge = this.hasAtmosphere() ? this.generateBackgroundRidge() : [];
+  }
+
+  // Set the planet's density and recompute the GM term (`this.gravity`) used by
+  // every gravity consumer. Surface gravity works out to
+  //   g_surface = gravity / baseRadius² = density * (baseRadius / REFERENCE)
+  // so it grows with the planet's size: doubling the radius doubles the pull a
+  // ship feels standing on the surface, rather than the small-planet spike you
+  // get when GM is held constant.
+  setDensity(density) {
+    this.density = density;
+    this.gravity = density * (this.baseRadius * this.baseRadius * this.baseRadius) / GRAVITY_REFERENCE_RADIUS;
   }
 
   generateBackgroundRidge() {

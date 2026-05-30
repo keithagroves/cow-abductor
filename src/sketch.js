@@ -14,6 +14,9 @@ let planets = []; // This is our array of planets
 let base;
 let delivered = 0;
 let research = 0;
+// Flips true the first time the ship reaches the base after the descent. Until
+// then the opening objective is to locate the launch pad.
+let padFound = false;
 let burnParticles = [];
 let splashParticles = [];
 let crashParticles = [];
@@ -155,7 +158,7 @@ function setup() {
 function buildWorld() {
   planets.length = 0;
   let scale = DEBUG.planetRadiusScale;
-  let density = DEBUG.planetGravity;
+  let density = DEBUG.planetDensity;
   let spacing = DEBUG.planetSpacing;
 
   let sun = createVector(10000, -100);
@@ -186,7 +189,9 @@ function buildWorld() {
     createVector(0, 0),
     2000 * scale,            // ~quarter the home-world radius
     1800, 330,               // big noise span + dense sampling = jagged surface
-    3000000,                 // gentle gravity (~0.047 px/frame² at surface)
+    density,                 // same density as the home world — but since
+                             // surface gravity scales with size, this quarter-
+                             // radius moon pulls ~¼ as hard at its surface
     100000,                  // initial radius — physics takes over from here
     planets[0].center
   );
@@ -494,10 +499,16 @@ function resetGame() {
   splashParticles = [];
   crashParticles = [];
   lasers = [];
-  // Spawn the player on the first non-sun planet so they start grounded near specimens.
+  // Begin the run descending toward the starter planet. Offset the spawn a
+  // couple thousand px of surface arc from the base so the first objective —
+  // finding the launch pad — takes a short hop to reach (the nav arrow points
+  // the way), without being a marathon traverse.
+  padFound = false;
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
   if (starter) {
-    lander.spawnOnPlanet(starter);
+    let offsetDeg = base ? degrees(2500 / starter.baseRadius) : 0;
+    let spawnAngle = base ? base.surfaceAngle + offsetDeg : 0;
+    lander.spawnAbovePlanet(starter, spawnAngle);
     starter.discovered = true;
   }
   gameState = GAME_STATES.WAITING;
@@ -575,8 +586,9 @@ function tryDeliver() {
 }
 
 function startGame() {
-  // Lift off from the starter planet (gives the gentle radial kick + refuel).
-  liftOff();
+  // The ship is already poised just outside the atmosphere (see resetGame), so
+  // starting simply hands control to physics and lets it descend — no lift-off.
+  gameState = GAME_STATES.PLAYING;
   userStartAudio().then(() => {
     if (
       backgroundMusic &&
@@ -716,6 +728,13 @@ function updateWorld(timeScale = 1) {
   }
   checkCollisions(lander, planets);
 
+  // First arrival at the base completes the opening "find the launch pad"
+  // objective and switches the HUD over to the abduct/deliver loop.
+  if (!padFound && base && base.inRange(lander.pos)) {
+    padFound = true;
+    showEvent("Launch pad located!");
+  }
+
   for (let cow of cows) {
     cow.update(timeScale);
   }
@@ -792,7 +811,7 @@ function logDiagnostics() {
   let spaceKey = keyIsDown(32);
   console.log(`thrust: ${lander.thrusting} fuel: ${lander.fuel.toFixed(1)} rotation: ${lander.rotation.toFixed(1)}°  targetRot: ${lander.targetRotation.toFixed(1)}°`);
   console.log(`keys held — left:${leftKey} right:${rightKey} up:${upKey} space:${spaceKey} mouse:${mouseIsPressed}`);
-  console.log(`DEBUG: atmoScale=${DEBUG.atmosphereScale} atmoDrag=${DEBUG.atmosphereDrag} planetScale=${DEBUG.planetRadiusScale} planetGravity=${DEBUG.planetGravity} planetSpacing=${DEBUG.planetSpacing}`);
+  console.log(`DEBUG: atmoScale=${DEBUG.atmosphereScale} atmoDrag=${DEBUG.atmosphereDrag} planetScale=${DEBUG.planetRadiusScale} planetDensity=${DEBUG.planetDensity} planetSpacing=${DEBUG.planetSpacing}`);
   console.log("gravity contributions (sorted by strength):");
   console.table(perPlanet);
   if (perAtmo.length > 0) {
@@ -2161,9 +2180,14 @@ function drawEventMessage() {
 function drawMissionReadout() {
   let nearest = getNearestPlanetInfo();
   let specimensRemaining = cows.filter((cow) => cow.state !== "stowed").length;
-  let objective = cargo > 0
-    ? "Land at base to deliver cargo"
-    : "Click to zap plants. Hover above samples and hold SPACE to beam them up.";
+  let objective;
+  if (!padFound) {
+    objective = "Descend and land at the launch pad";
+  } else if (cargo > 0) {
+    objective = "Land at base to deliver cargo";
+  } else {
+    objective = "Click to zap plants. Hover above samples and hold SPACE to beam them up.";
+  }
 
   textAlign(LEFT);
   textSize(14);
@@ -2193,6 +2217,15 @@ function getNearestPlanetInfo() {
 
 function getNavTarget() {
   if (!lander || !base) return null;
+
+  // Opening objective: steer the player to the launch pad before anything else.
+  if (!padFound) {
+    return {
+      pos: base.pos,
+      label: "LAUNCH PAD",
+      color: { r: 120, g: 220, b: 255 }
+    };
+  }
 
   if (cargo > 0) {
     return {
