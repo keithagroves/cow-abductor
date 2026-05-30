@@ -8,9 +8,9 @@ const DEBUG = {
   planetSpacing: 14000,
   orbitSpeedScale: 0, // 0 freezes orbits, 1 = baseline random speeds
   pullStrength: 0.15,
-  cameraMinZoom: 0.7,
-  cameraMaxZoom: 2.0,
-  cameraZoomDistance: 600,
+  cameraGroundZoom: 2.0,   // zoom scale at the surface (tight, inside the atmosphere)
+  cameraFraming: 0.4,      // planet-framing factor outside the atmosphere — surface
+                           // distance maps to this fraction of screen height
   zoomOverride: 0, // 0 = use dynamic distance-based zoom; >0 forces this scale
   showTrajectory: true,
   minimapSize: 280,
@@ -31,7 +31,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 14;
+const DEBUG_VERSION = 15;
 
 function loadDebugFromStorage() {
   try {
@@ -70,9 +70,8 @@ const DEBUG_PARAMS = [
   { key: "planetRadiusScale", label: "Planet Size ×",     min: 0.5,  max: 10.0, step: 0.1,   live: false },
   { key: "planetSpacing",     label: "Planet Spacing",    min: 1500, max: 40000, step: 200,  live: false },
   { key: "orbitSpeedScale",   label: "Orbit Speed ×",     min: 0,    max: 2,    step: 0.05,  live: true },
-  { key: "cameraMinZoom",     label: "Cam Min Zoom",      min: 0.1,  max: 2.0,  step: 0.05,  live: true },
-  { key: "cameraMaxZoom",     label: "Cam Max Zoom",      min: 0.2,  max: 4.0,  step: 0.05,  live: true },
-  { key: "cameraZoomDistance",label: "Cam Zoom Range",    min: 100,  max: 4000, step: 50,    live: true },
+  { key: "cameraGroundZoom",  label: "Cam Ground Zoom",   min: 0.2,  max: 4.0,  step: 0.05,  live: true },
+  { key: "cameraFraming",     label: "Cam Framing",       min: 0.05, max: 1.5,  step: 0.05,  live: true },
   { key: "zoomOverride",      label: "Zoom Out (0 = off)", min: 0,   max: 1,    step: 0.002, live: true },
   { key: "minimapSize",       label: "Map Size",          min: 150,  max: 800,  step: 10,    live: true },
   { key: "minimapZoom",       label: "Map Zoom",          min: 0.001, max: 0.08, step: 0.001, live: true },

@@ -1541,25 +1541,33 @@ function updateView() {
     // Manual zoom — debug flag forces a specific scale regardless of altitude.
     targetScale = DEBUG.zoomOverride;
   } else {
-    let surfaceDistance = getClosestSurfaceDistance();
-    let clampedDistance = constrain(surfaceDistance, 0, DEBUG.cameraZoomDistance);
-    // Close-range zoom: tight near the surface, easing out to cameraMinZoom by
-    // cameraZoomDistance — the normal gameplay framing.
-    let closeScale = map(
-      clampedDistance,
-      0,
-      DEBUG.cameraZoomDistance,
-      DEBUG.cameraMaxZoom,
-      DEBUG.cameraMinZoom
-    );
-    // High above a surface (the opening descent) pull the camera back so the
-    // planet stays framed ~40% down the screen instead of the ship falling
-    // through empty space. min() means this only takes over once you're high
-    // enough that closeScale would push the surface off-screen; near the ground
-    // closeScale wins and normal gameplay framing is unchanged. The floor keeps
-    // the planet a sensible size at extreme altitude.
-    let framingScale = (height * 0.4) / max(1, surfaceDistance);
-    targetScale = max(0.02, min(closeScale, framingScale));
+    // Altitude-based framing split at the atmosphere boundary. The atmosphere is
+    // thick relative to any sane fixed zoom range, so a single curve either keeps
+    // you zoomed out through the whole descent (can't see the surface) or zoomed
+    // in from space (planet off-screen). Instead:
+    //   - Outside the atmosphere: frame the planet — surface distance maps to
+    //     cameraFraming of screen height, so the body stays a sensible size on
+    //     approach and the camera eases out as you climb.
+    //   - Inside the atmosphere: ramp from that same boundary framing up to
+    //     cameraGroundZoom at the surface, so terrain/cows get readable as you
+    //     descend. The two regimes share the boundary value, so there's no jump.
+    // atmosphereOuterRadius() returns baseRadius * (1 + atmosphereScale) for every
+    // body, so airless planets (the moon) get a hypothetical boundary too.
+    let { planet, surfaceDistance } = getClosestPlanetInfo();
+    let atmoThickness = max(1, planet.atmosphereOuterRadius() - planet.baseRadius);
+    // Zoom that frames the planet at the atmosphere top — the shared knot point.
+    let boundaryScale = (height * DEBUG.cameraFraming) / atmoThickness;
+
+    if (surfaceDistance <= atmoThickness) {
+      // 1 at the atmosphere top, 0 at the surface.
+      let f = surfaceDistance / atmoThickness;
+      targetScale = lerp(DEBUG.cameraGroundZoom, boundaryScale, f);
+    } else {
+      // Outside: keep the surface framed at cameraFraming of screen height. At the
+      // boundary this equals boundaryScale, so it joins the inside ramp smoothly.
+      targetScale = (height * DEBUG.cameraFraming) / surfaceDistance;
+    }
+    targetScale = max(0.02, targetScale);
   }
 
   // Layer the player's manual zoom on top of the automatic framing so it
@@ -1613,17 +1621,21 @@ function updateView() {
   }
 }
 
-function getClosestSurfaceDistance() {
+// Nearest body (by distance to its terrain) and that distance. The camera frames
+// whichever world dominates, so it needs the planet itself, not just the gap.
+function getClosestPlanetInfo() {
+  let closest = planets[0];
   let closestDistance = Infinity;
 
   for (let planet of planets) {
     let surfaceDistance = getSurfaceDistance(lander.pos, planet);
     if (surfaceDistance < closestDistance) {
       closestDistance = surfaceDistance;
+      closest = planet;
     }
   }
 
-  return closestDistance;
+  return { planet: closest, surfaceDistance: closestDistance };
 }
 
 function getSurfaceDistance(position, planet) {
