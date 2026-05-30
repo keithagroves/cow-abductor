@@ -162,6 +162,7 @@ function setup() {
   setupDebugPanel();
   initAtmosphere();
   initClouds();
+  initPlumeFluid();
 }
 
 function buildWorld() {
@@ -442,6 +443,13 @@ function draw() {
 
   drawBurnParticles();
   drawSplashParticles();
+  // Experimental GPU fluid plume, anchored at the engine nozzle (local ~(0,21),
+  // just below the engine bell) and rotated with the ship. Drawn before the
+  // hull so the body sits on top of the exhaust.
+  if (DEBUG.fluidPlume && lander.active) {
+    let nozzle = lander.localToWorld(0, 21);
+    drawPlumeFluid(nozzle, lander.rotation, DEBUG.fluidPlumeScale);
+  }
   lander.render(timeScale);
   drawCrashParticles();
 
@@ -491,6 +499,7 @@ function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   timeSlider.position(width - 220, 30);
   resetView();
+  resizePlumeFluid();
   // If you want to regenerate or adapt planet data, do it here
 }
 
@@ -757,6 +766,12 @@ function updateWorld(timeScale = 1) {
   }
 
   updateBurnParticles(timeScale);
+  // Experimental GPU fluid plume — keep stepping after cutoff so the tail
+  // dissipates; inject only while the engine is firing and there's fuel.
+  if (DEBUG.fluidPlume) {
+    let firing = lander.active && lander.thrusting > 0 && lander.fuel > 0;
+    updatePlumeFluid(firing ? lander.thrusting : 0);
+  }
   updateWaterInteraction(timeScale);
   updateSplashParticles(timeScale);
   updateDiscoveries();

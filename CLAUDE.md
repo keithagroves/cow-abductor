@@ -44,8 +44,7 @@ rules; coverage can be re-checked with codeswim.
 ## Conventions
 
 - **Vectors**: use p5's `createVector()` / `p5.Vector` everywhere. There is no
-  custom vector class. (Note: `index.html` still references a non-existent
-  `Vector2.js` — a harmless dead `<script>` tag.)
+  custom vector class (the `Vector2.js` line in `index.html` is commented out).
 - **Game state**: the `GAME_STATES` enum (`WAITING`, `PLAYING`, `LANDED`,
   `CRASHED`, `GAMEOVER`) in [src/constants.js](src/constants.js) drives the loop's
   state machine.

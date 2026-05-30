@@ -25,13 +25,15 @@ const DEBUG = {
   heatGain: 0.02,         // hull heat gained per (density * excess speed) per frame
   heatCool: 0.4,          // hull heat dissipated per frame when not burning
   heatMax: 100,           // hull explodes when heat reaches this value
+  fluidPlume: false,      // experimental GPU stable-fluids exhaust plume (off = particle flame)
+  fluidPlumeScale: 220,   // world-space size of the fluid plume quad
   shown: false
 };
 
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 15;
+const DEBUG_VERSION = 16;
 
 function loadDebugFromStorage() {
   try {
@@ -85,7 +87,9 @@ const DEBUG_PARAMS = [
   { key: "heatGain",          label: "Heat Gain",         min: 0,    max: 0.2,  step: 0.005, live: true },
   { key: "heatCool",          label: "Heat Cool",         min: 0,    max: 3.0,  step: 0.05,  live: true },
   { key: "heatMax",           label: "Heat Limit",        min: 20,   max: 400,  step: 5,     live: true },
-  { key: "showTrajectory",    label: "Show Trajectory (T)", type: "toggle",                   live: true }
+  { key: "showTrajectory",    label: "Show Trajectory (T)", type: "toggle",                   live: true },
+  { key: "fluidPlume",        label: "GPU Fluid Plume",   type: "toggle",                       live: true },
+  { key: "fluidPlumeScale",   label: "Fluid Plume Size",  min: 60,   max: 600,  step: 10,    live: true }
 ];
 
 let debugPanel;

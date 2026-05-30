@@ -22,6 +22,7 @@ flowchart TD
     draw --> physics["lander.update + checkCollisions()"]
     draw --> render["draw planets, entities, atmosphere, clouds"]
     draw --> effects["lasers, particles, splashes, burn"]
+    effects --> plume["GPU fluid plume (experimental)"]
     draw --> hud["drawHUD / drawMinimap / drawMissionReadout"]
     draw --> state["game-state messages & transitions"]
 
@@ -43,6 +44,7 @@ flowchart TD
     click checkCollisions call navigate("../src/sketch.js")
     click checkSafeLanding call navigate("../src/sketch.js")
     click startGame call navigate("../src/sketch.js")
+    click plume call navigate("../src/effects/plumeFluid.js")
 ```
 
 ## Responsibilities
@@ -56,7 +58,9 @@ flowchart TD
   `isLanderUprightForPlanet`, `getSurfaceDistance`, `getSurfaceRadius`,
   `getClosestPlanetInfo`, `distanceToLineSegment`.
 - **Effects** — `fireLaser`, burn/splash/crash particle systems, and the
-  `getBeamStopPositionRadial` beam geometry.
+  `getBeamStopPositionRadial` beam geometry. The loop also drives the
+  experimental GPU fluid plume (`updatePlumeFluid`/`drawPlumeFluid`) anchored at
+  the lander's nozzle.
 - **UI** — `drawHUD`, `drawMinimap`, `drawMissionReadout`, `drawStarField`,
   `pickConstellation`, `drawNavTargetIndicator`, `drawGameStateMessages`.
 - **State machine** — `startGame`, `resetGame`, `liftOff`, `tryDeliver`,
@@ -66,6 +70,11 @@ flowchart TD
 
 - [../src/sketch.js](../src/sketch.js) — the entire orchestration core: globals,
   game loop, world generation, camera, collisions, effects, HUD, and state.
+- [../src/effects/plumeFluid.js](../src/effects/plumeFluid.js) — experimental GPU
+  stable-fluids exhaust plume (semi-Lagrangian advection + Jacobi pressure
+  projection on float framebuffers). Stepped by `updateWorld` and composited at
+  the nozzle in `draw`, behind the `DEBUG.fluidPlume` toggle. Technique adapted
+  from the Navier-Stokes reference in [../references.md](../references.md).
 
 It wires together the [entities](entities.md) and the [world](world.md), and
 drives the thruster synth in [../src/core/sound.js](../src/core/sound.js).
