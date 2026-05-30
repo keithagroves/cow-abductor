@@ -32,13 +32,16 @@ let backgroundMusic=null;
 let alienGroundImage;
 let rocketSound;
 let thrustPlaying = false;
-const KEY_A = 65, KEY_D = 68, KEY_W = 87, KEY_S = 83, KEY_Q = 81, KEY_E = 69;
-const CAMERA_ROTATE_SPEED = 1.5; // degrees per frame while Q/E is held
+const KEY_A = 65, KEY_D = 68, KEY_W = 87, KEY_S = 83;
 let timeScale = 1;
 let timeSlider;
 
 const CAMERA_ZOOM_EASE = 0.08;
 const CAMERA_FOLLOW_EASE = 0.18;
+// How fast the camera rolls to keep gravity pointing screen-down. Low enough
+// that the horizon swings smoothly as you fly around a planet rather than
+// snapping, high enough that you're upright again within ~a second.
+const CAMERA_ROLL_EASE = 0.08;
 const LANDING_MAX_TILT = 45;
 const DISCOVERY_DISTANCE = 2500;
 const PLANET_NAMES = [
@@ -408,8 +411,9 @@ function draw() {
   updateCrashParticles(timeScale);
 
   push();
-  // Camera transform: rotate + zoom around the focal point (lander), so
-  // pressing Q/E rolls the world view without sliding the ship off-screen.
+  // Camera transform: rotate + zoom around the focal point (lander). The roll
+  // is driven by gravity (see updateView) so "down" stays toward the planet
+  // without sliding the ship off-screen.
   translate(width / 2, height / 2);
   rotate(view.rotation);
   scale(view.scale);
@@ -1455,8 +1459,8 @@ function resetView() {
   view.focusX = lander ? lander.pos.x : 0;
   view.focusY = lander ? lander.pos.y : 0;
   // Align the camera so gravity from the ship's nearest planet points
-  // screen-down. A spawn on the side of a planet would otherwise leave the
-  // player flying sideways relative to gravity until they manually roll with Q/E.
+  // screen-down on the very first frame. updateView() keeps it aligned from
+  // there; this just avoids a visible roll-into-place right after a reset.
   if (lander && lander.nearestPlanet) {
     let ax = lander.pos.x - lander.nearestPlanet.center.x;
     let ay = lander.pos.y - lander.nearestPlanet.center.y;
@@ -1536,6 +1540,31 @@ function updateView() {
     }
     view.focusX += worldVx * timeScale + (lander.pos.x - view.focusX) * CAMERA_FOLLOW_EASE;
     view.focusY += worldVy * timeScale + (lander.pos.y - view.focusY) * CAMERA_FOLLOW_EASE;
+
+    // Roll the camera so gravity always points screen-down — keeps you upright
+    // on a planet's surface no matter which side you landed on, and smoothly
+    // swings the horizon as you fly around the body. Uses net gravity (summed
+    // over all planets) so the camera follows whichever world dominates instead
+    // of snapping between them. Skipped in deep space where pull is negligible
+    // and "down" is meaningless, leaving the current roll untouched.
+    let gx = 0, gy = 0;
+    for (let p of planets) {
+      let dx = p.center.x - lander.pos.x;
+      let dy = p.center.y - lander.pos.y;
+      let dSq = max(1, dx * dx + dy * dy);
+      let d = sqrt(dSq);
+      let force = p.gravity / dSq;
+      gx += (dx / d) * force;
+      gy += (dy / d) * force;
+    }
+    if (gx * gx + gy * gy > 1e-12) {
+      // Target roll that puts the gravity vector at screen-down (90°). Matches
+      // the formula resetView() uses for the spawn alignment.
+      let targetRotation = 90 - atan2(gy, gx);
+      // Shortest angular path so a 359°→1° wrap doesn't spin the long way.
+      let delta = ((targetRotation - view.rotation + 540) % 360) - 180;
+      view.rotation += delta * CAMERA_ROLL_EASE;
+    }
   } else {
     view.focusX += (targetFocusX - view.focusX) * CAMERA_FOLLOW_EASE;
     view.focusY += (targetFocusY - view.focusY) * CAMERA_FOLLOW_EASE;
@@ -1742,7 +1771,7 @@ function drawStarField() {
   let cy = view.focusY;
 
   push();
-  // Stars rotate with the world view so Q/E roll feels consistent.
+  // Stars rotate with the world view so the gravity-driven camera roll feels consistent.
   translate(width / 2, height / 2);
   rotate(view.rotation);
 
@@ -2146,7 +2175,7 @@ function drawMissionReadout() {
     text(`Nearest: ${bodyName} (${floor(nearest.distance)}m)`, 20, 200);
   }
   text(`Specimens remaining: ${specimensRemaining}`, 20, 220);
-  text("Controls: A/D rotate  |  W thrust  |  Q/E roll camera  |  Click zap  |  Space beam", 20, 240);
+  text("Controls: A/D rotate  |  W thrust  |  Click zap  |  Space beam", 20, 240);
 }
 
 function getNearestPlanetInfo() {
@@ -2339,11 +2368,8 @@ function pollInput(timeScale = 1) {
   else if (!wantThrust && thrustPlaying) stopThruster();
   lander.setThrust(wantThrust ? 1 : 0);
 
-  // Camera roll — handy when the ship starts on the side of a planet and
-  // "down" lands diagonally on screen. Independent of time scale so the camera
-  // stays responsive during slow-mo or fast-forward.
-  if (keyIsDown(KEY_Q)) view.rotation -= CAMERA_ROTATE_SPEED;
-  if (keyIsDown(KEY_E)) view.rotation += CAMERA_ROTATE_SPEED;
+  // Camera roll is now automatic — updateView() continuously rolls the view so
+  // gravity points screen-down, so there's no manual Q/E roll to handle here.
 
   // Tractor beam fires straight down from the ship's local frame while space is held.
   lander.abducting = keyIsDown(32);
