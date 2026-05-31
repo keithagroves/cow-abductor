@@ -164,6 +164,7 @@ function setup() {
   initClouds();
   initPlumeFluid();
   initBurnFluid();
+  initShipShader();
 }
 
 function buildWorld() {

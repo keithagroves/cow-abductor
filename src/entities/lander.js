@@ -479,7 +479,18 @@ class Lander {
       if (this.thrusting > 0 && this.active && this.fuel > 0) {
         this.drawThrustFlame();
       }
-      this.drawShipBody();
+      // Experimental shader-rendered alien hull (DEBUG.shaderShip); falls back to
+      // the hand-drawn vector hull. Blitted in the ship's local frame.
+      if (typeof DEBUG !== "undefined" && DEBUG.shaderShip &&
+          typeof shipGfx !== "undefined" && shipGfx) {
+        let h = constrain((this.heat || 0) / (DEBUG.heatMax || 100), 0, 1);
+        renderShipShader(h, this.thrustLevel, shipSunDirLocal(this), this.abducting, this.fuel > 0);
+        imageMode(CENTER);
+        image(shipGfx, 0, SHIP_DRAW_CY, SHIP_DRAW_SIZE, SHIP_DRAW_SIZE);
+        imageMode(CORNER);
+      } else {
+        this.drawShipBody();
+      }
 
       pop();
     }

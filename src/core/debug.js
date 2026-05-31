@@ -29,13 +29,14 @@ const DEBUG = {
   fluidPlumeScale: 220,   // world-space size of the fluid plume quad
   fluidBurn: false,       // experimental GPU stable-fluids re-entry burn wake (additive to particles)
   fluidBurnScale: 160,    // world-space size of the fluid burn quad
+  shaderShip: true,       // experimental shader-rendered alien hull (off = vector hull)
   shown: false
 };
 
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 18;
+const DEBUG_VERSION = 19;
 
 function loadDebugFromStorage() {
   try {
@@ -93,7 +94,8 @@ const DEBUG_PARAMS = [
   { key: "fluidPlume",        label: "GPU Fluid Plume",   type: "toggle",                       live: true },
   { key: "fluidPlumeScale",   label: "Fluid Plume Size",  min: 60,   max: 600,  step: 10,    live: true },
   { key: "fluidBurn",         label: "GPU Fluid Burn",    type: "toggle",                       live: true },
-  { key: "fluidBurnScale",    label: "Fluid Burn Size",   min: 60,   max: 600,  step: 10,    live: true }
+  { key: "fluidBurnScale",    label: "Fluid Burn Size",   min: 60,   max: 600,  step: 10,    live: true },
+  { key: "shaderShip",        label: "Shader Alien Hull", type: "toggle",                       live: true }
 ];
 
 let debugPanel;

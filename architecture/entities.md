@@ -14,6 +14,7 @@ them uniformly.
 ```mermaid
 flowchart TD
     Lander["Lander — player ship<br/>thrust, drag, fuel, heat, beam"]
+    Lander --> shipShader["Shader alien hull (experimental)"]
     Cow["Cow"]
     Plant["Plant"]
     Mineral["Mineral"]
@@ -36,6 +37,7 @@ flowchart TD
     click Plant call navigate("../src/entities/plant.js")
     click Mineral call navigate("../src/entities/mineral.js")
     click Alien call navigate("../src/entities/alien.js")
+    click shipShader call navigate("../src/effects/shipShader.js")
     click cargo call navigate("../src/entities/plant.js")
     click intact call navigate("../src/entities/plant.js")
     click zapped call navigate("../src/entities/plant.js")
@@ -60,6 +62,10 @@ heavier on the beam.
   procedural boulder mirroring the plant/cargo state machine.
 - [../src/entities/alien.js](../src/entities/alien.js) — `Alien`, a cosmetic
   figure that orbits a planet's surface.
+- [../src/effects/shipShader.js](../src/effects/shipShader.js) — experimental
+  shader-rendered "alien tech" hull (SDF + faux-3D lighting, fresnel rim, energy
+  veins, heat/thrust reactive) that the `Lander` blits in place of the vector
+  hull when `DEBUG.shaderShip` is on.
 
 Entities are created and updated by the [game loop](game-loop.md) and positioned
 relative to [Planet](world.md) surfaces.
