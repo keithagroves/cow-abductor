@@ -23,6 +23,7 @@ flowchart TD
     draw --> render["draw planets, entities, atmosphere, clouds"]
     draw --> effects["lasers, particles, splashes, burn"]
     effects --> plume["GPU fluid plume (experimental)"]
+    effects --> burn["GPU fluid burn (experimental)"]
     draw --> hud["drawHUD / drawMinimap / drawMissionReadout"]
     draw --> state["game-state messages & transitions"]
 
@@ -45,6 +46,7 @@ flowchart TD
     click checkSafeLanding call navigate("../src/sketch.js")
     click startGame call navigate("../src/sketch.js")
     click plume call navigate("../src/effects/plumeFluid.js")
+    click burn call navigate("../src/effects/burnFluid.js")
 ```
 
 ## Responsibilities
@@ -61,7 +63,9 @@ flowchart TD
   `getBeamStopPositionRadial` beam geometry. The loop also drives the
   experimental GPU fluid plume (`updatePlumeFluid`/`drawPlumeFluid`) anchored at
   the lander's nozzle, with `getPlumeGround` feeding the planet surface in as a
-  collision wall so the exhaust splays along the ground.
+  collision wall so the exhaust splays along the ground, plus the experimental
+  GPU re-entry burn (`updateBurnFluid`/`drawBurnFluid`, `getBurnState`) — a
+  velocity-aligned plasma wake with the hull as an obstacle.
 - **UI** — `drawHUD`, `drawMinimap`, `drawMissionReadout`, `drawStarField`,
   `pickConstellation`, `drawNavTargetIndicator`, `drawGameStateMessages`.
 - **State machine** — `startGame`, `resetGame`, `liftOff`, `tryDeliver`,
@@ -71,11 +75,19 @@ flowchart TD
 
 - [../src/sketch.js](../src/sketch.js) — the entire orchestration core: globals,
   game loop, world generation, camera, collisions, effects, HUD, and state.
+- [../src/effects/fluidSim.js](../src/effects/fluidSim.js) — reusable GPU
+  "Stable Fluids" solver (`FluidSim` class + shared advect/splat/projection
+  shaders and a half-plane+ellipse obstacle test). Backs every fluid effect.
+  Technique adapted from the Navier-Stokes reference in
+  [../references.md](../references.md).
 - [../src/effects/plumeFluid.js](../src/effects/plumeFluid.js) — experimental GPU
-  stable-fluids exhaust plume (semi-Lagrangian advection + Jacobi pressure
-  projection on float framebuffers). Stepped by `updateWorld` and composited at
-  the nozzle in `draw`, behind the `DEBUG.fluidPlume` toggle. Technique adapted
-  from the Navier-Stokes reference in [../references.md](../references.md).
+  exhaust plume built on `FluidSim`. Stepped by `updateWorld` and composited at
+  the nozzle in `draw`, behind the `DEBUG.fluidPlume` toggle, with the planet
+  surface (`getPlumeGround`) fed in as a collision plane.
+- [../src/effects/burnFluid.js](../src/effects/burnFluid.js) — experimental GPU
+  re-entry burn wake built on `FluidSim`, aligned to the ship's velocity
+  relative to the air (`getBurnState`) with the hull fed in as an ellipse
+  obstacle. Behind the `DEBUG.fluidBurn` toggle.
 
 It wires together the [entities](entities.md) and the [world](world.md), and
 drives the thruster synth in [../src/core/sound.js](../src/core/sound.js).

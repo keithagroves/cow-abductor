@@ -163,6 +163,7 @@ function setup() {
   initAtmosphere();
   initClouds();
   initPlumeFluid();
+  initBurnFluid();
 }
 
 function buildWorld() {
@@ -450,6 +451,9 @@ function draw() {
     let nozzle = lander.localToWorld(0, 21);
     drawPlumeFluid(nozzle, lander.rotation, DEBUG.fluidPlumeScale);
   }
+  if (DEBUG.fluidBurn && lander.active) {
+    drawBurnFluid(getBurnState());
+  }
   lander.render(timeScale);
   drawCrashParticles();
 
@@ -500,6 +504,7 @@ function windowResized() {
   timeSlider.position(width - 220, 30);
   resetView();
   resizePlumeFluid();
+  resizeBurnFluid();
   // If you want to regenerate or adapt planet data, do it here
 }
 
@@ -772,6 +777,9 @@ function updateWorld(timeScale = 1) {
     let firing = lander.active && lander.thrusting > 0 && lander.fuel > 0;
     updatePlumeFluid(firing ? lander.thrusting : 0, getPlumeGround());
   }
+  if (DEBUG.fluidBurn) {
+    updateBurnFluid(getBurnState());
+  }
   updateWaterInteraction(timeScale);
   updateSplashParticles(timeScale);
   updateDiscoveries();
@@ -863,7 +871,9 @@ function updateBurnParticles(timeScale = 1) {
       let relSpeed = sqrt(relVx * relVx + relVy * relVy);
       let excess = max(0, relSpeed - DEBUG.burnSpeedThreshold);
       intensity = sample.density * excess;
-      if (intensity > 0) {
+      // When the GPU fluid burn is on it replaces the particle flame, so skip
+      // emission (heat accumulation below still runs either way).
+      if (intensity > 0 && !DEBUG.fluidBurn) {
         let count = floor(intensity * DEBUG.burnIntensity * timeScale);
         for (let i = 0; i < count; i++) emitBurnParticle(intensity, relVx, relVy);
       }
@@ -1692,6 +1702,33 @@ function getPlumeGround() {
     py: planet.center.y + (dy / dist) * surfR,
     nx, ny,                                      // local terrain normal
     dist: dist - surfR,                          // nozzle altitude above surface
+  };
+}
+
+// Build the state the experimental GPU fluid re-entry burn needs: the ship's
+// velocity relative to the air it's in, the burn intensity (atmospheric density
+// × speed over the burn threshold — the same signal the particle burn uses), and
+// the ship pose. Returns null when there's no ship. Intensity may be 0 (no
+// atmosphere / too slow), in which case the wake just dissipates.
+function getBurnState() {
+  if (!lander || !lander.active) return null;
+  let sample = lander.sampleAtmosphereAt(lander.pos);
+  let pvx = 0, pvy = 0;
+  if (sample && sample.planet && sample.planet.getOrbitalVelocity) {
+    let pv = sample.planet.getOrbitalVelocity();
+    pvx = pv.x; pvy = pv.y;
+  }
+  let relVx = lander.vel.x - pvx;
+  let relVy = lander.vel.y - pvy;
+  let relSpeed = sqrt(relVx * relVx + relVy * relVy);
+  let density = sample ? sample.density : 0;
+  let excess = max(0, relSpeed - DEBUG.burnSpeedThreshold);
+  return {
+    intensity: density * excess,
+    relVx, relVy, relSpeed,
+    rotationDeg: lander.rotation,
+    scale: lander.scale,
+    center: lander.pos,
   };
 }
 

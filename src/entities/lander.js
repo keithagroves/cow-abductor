@@ -510,19 +510,6 @@ class Lander {
     let critical = h > 0.7;
     let pulse = critical ? 0.6 + 0.4 * sin(frameCount * 18) : 1;
 
-    // Red-hot aura behind the hull when heat is significant.
-    if (h > 0.15) {
-      push();
-      blendMode(ADD);
-      noStroke();
-      let auraA = 110 * hVisible * pulse;
-      fill(255, 80, 30, auraA);
-      ellipse(0, -6, 60 + 20 * hVisible, 64 + 22 * hVisible);
-      fill(255, 200, 100, auraA * 0.7);
-      ellipse(0, -6, 36 + 12 * hVisible, 40 + 14 * hVisible);
-      pop();
-    }
-
     noStroke();
 
     // Outer hull silhouette — tapered nose to a wide engine block.

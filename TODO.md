@@ -9,6 +9,8 @@
 
 - use a shader to draw the ship.
 
+- thrusters dont interact with water
+
 NICE TO HAVES:
 - Maybe deploy a parachute on entry? Could be a good tool for landing on planets.
 
