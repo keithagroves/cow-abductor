@@ -64,6 +64,7 @@ class Lander {
     this.landingPlanet = null;
     this.landingOffset = null;
     this.inWater = false;
+    this.parachute = false;   // descent brake; deploy/cut with C
     this.trajectoryPoints = [];
     this.trajectoryOffsets = [];
     this.trajectoryLastFrame = -Infinity;
@@ -81,6 +82,7 @@ class Lander {
     this.crashed = true;
     this.thrusting = 0;
     this.abducting = false;
+    this.parachute = false;
 
     console.log("Lander crashed!");
   }
@@ -89,6 +91,7 @@ class Lander {
     this.active = false;
     this.thrusting = 0;
     this.abducting = false;
+    this.parachute = false;
     this.vel.mult(0); // Stop all movement (relative to the landing body)
 
     // Stick the ship to whatever we touched down on. The world-frame snap
@@ -452,6 +455,25 @@ class Lander {
       this.pos.add(this.vel.copy().mult(dt));
     }
 
+    // Parachute: while deployed in atmosphere, bleed speed hard toward the
+    // local air frame so it works as a descent brake. Stows itself in vacuum
+    // (nothing to catch) so it can't be used as a space anchor.
+    if (this.parachute) {
+      let sample = this.sampleAtmosphereAt(this.pos);
+      if (sample.density > 0.02) {
+        let pvx = 0, pvy = 0;
+        if (sample.planet && sample.planet.getOrbitalVelocity) {
+          let pv = sample.planet.getOrbitalVelocity();
+          pvx = pv.x; pvy = pv.y;
+        }
+        let f = pow(0.90, timeScale);
+        this.vel.x = pvx + (this.vel.x - pvx) * f;
+        this.vel.y = pvy + (this.vel.y - pvy) * f;
+      } else {
+        this.parachute = false;
+      }
+    }
+
     // Update collision points
     this.bottomLeft = createVector(
       this.pos.x - 10 * this.scale,
@@ -478,6 +500,10 @@ class Lander {
       // Thrust flame is drawn first so the hull sits on top of it.
       if (this.thrusting > 0 && this.active && this.fuel > 0) {
         this.drawThrustFlame();
+      }
+      // Parachute canopy billows above the nose while deployed.
+      if (this.parachute && this.active) {
+        this.drawParachute();
       }
       // Experimental shader-rendered alien hull (DEBUG.shaderShip); falls back to
       // the hand-drawn vector hull. Blitted in the ship's local frame.
@@ -603,6 +629,26 @@ class Lander {
     let blink = 0.5 + 0.5 * sin(frameCount * 6);
     fill(255, 70 + 80 * blink, 70 + 80 * blink);
     circle(0, -37, 3);
+  }
+
+  // Canopy + risers above the nose (ship local -y). Sways gently so the
+  // descent reads as a real chute catching air.
+  drawParachute() {
+    let sway = sin(frameCount * 4) * 3;
+    push();
+    // Risers from the shoulders up to the canopy.
+    stroke(225, 230, 240, 210);
+    strokeWeight(1.2);
+    line(-10, -20, -26 + sway, -52);
+    line(10, -20, 26 + sway, -52);
+    line(0, -22, sway, -56);
+    // Canopy dome.
+    noStroke();
+    fill(230, 95, 95, 235);
+    arc(sway, -54, 64, 42, 180, 360, CHORD);
+    fill(255, 255, 255, 70);
+    arc(sway, -54, 64, 42, 200, 255, CHORD);
+    pop();
   }
 
   // Pulsing plasma exhaust — drawn in local space below the engine bell.

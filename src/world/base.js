@@ -118,32 +118,70 @@ class Base {
     translate(this.pos.x, this.pos.y);
     rotate(this.surfaceAngle + 90); // stand the pad up relative to the planet
     noStroke();
-    // Pad slab
-    fill(80, 90, 110);
-    rect(-70, -6, 140, 12, 3);
-    // Pad striping
-    fill(255, 220, 60);
-    for (let i = -3; i <= 3; i++) {
-      rect(i * 18 - 7, -4, 14, 3);
+
+    // Lower, flatter shadow in the same 2D language as the ship shadow.
+    fill(0, 0, 0, 72);
+    ellipse(0, 22, 178, 18);
+    fill(0, 0, 0, 38);
+    ellipse(0, 24, 214, 24);
+
+    // Sink the pad into the local ground plane. Local +y points into the planet.
+    translate(0, 7);
+
+    // Earthworks/retaining plate partly buried below the deck.
+    fill(38, 44, 50);
+    ellipse(0, 9, 176, 24);
+    fill(55, 63, 72);
+    ellipse(0, 0, 190, 24);
+
+    // Main launch deck: a round pad seen in the same flattened side-on
+    // projection as the shadows, so it reads as an ellipse.
+    fill(34, 38, 43);
+    ellipse(0, -2, 176, 26);
+    fill(82, 95, 108);
+    ellipse(0, -10, 166, 32);
+    fill(126, 145, 158);
+    ellipse(0, -14, 146, 18);
+    fill(70, 82, 94);
+    ellipse(0, -10, 96, 14);
+
+    // Hazard striping sits across the oval top, clipped visually by using
+    // short center bars and shorter outer bars.
+    fill(230, 205, 70);
+    for (let i = -4; i <= 4; i++) {
+      let len = 14 - abs(i) * 2;
+      rect(i * 16 - len / 2, -16, len, 3, 1);
     }
-    // Pad legs into the surface
-    fill(70, 80, 95);
-    rect(-66, 6, 8, 16);
-    rect(58, 6, 8, 16);
-    // Flagpole
-    stroke(200, 220, 240);
+
+    // Short buried supports. They should feel planted, not tall and spindly.
+    fill(48, 55, 64);
+    rect(-68, 5, 10, 24);
+    rect(58, 5, 10, 24);
+    fill(30, 35, 40);
+    rect(-72, 27, 18, 5, 2);
+    rect(54, 27, 18, 5, 2);
+
+    // Low beacon mast. Keeping this short avoids fighting the foreground trees.
+    stroke(165, 205, 220);
     strokeWeight(2);
-    line(-40, -6, -40, -42);
-    // Flag (waves a little)
-    let wave = sin(frameCount * 2) * 3;
+    line(-52, -16, -52, -36);
     noStroke();
-    fill(120, 220, 255);
-    triangle(-40, -42, -22 + wave, -38, -40, -28);
+    fill(120, 230, 255, 230);
+    circle(-52, -39, 7);
+    fill(120, 230, 255, 70 + 35 * sin(frameCount * 3));
+    circle(-52, -39, 16);
+
+    // Small pennant gives it "base" identity without becoming a tall flagpole.
+    let wave = sin(frameCount * 2) * 2;
+    noStroke();
+    fill(120, 220, 255, 210);
+    triangle(-52, -35, -35 + wave, -32, -52, -25);
+
     // Label
-    fill(180, 235, 255);
+    fill(185, 235, 245);
     textAlign(CENTER, BOTTOM);
-    textSize(11);
-    text("BASE", 0, -10);
+    textSize(10);
+    text("BASE", 0, -18);
     pop();
 
     // Range halo in world space (not rotated) so it always reads as a circle.

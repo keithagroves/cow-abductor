@@ -12,6 +12,9 @@ let minerals = [];
 let lasers = [];
 let planets = []; // This is our array of planets
 let base;
+// Remembered surface angle to drop the ship in above on a fresh run, before
+// any launch pad has been built.
+let starterSpawnAngle = 0;
 let delivered = 0;
 let research = 0;
 // Flips true the first time the ship reaches the base after the descent. Until
@@ -21,6 +24,9 @@ let burnParticles = [];
 let splashParticles = [];
 let crashParticles = [];
 let stars = [];
+// Static (parallax-0) background stars. They never translate with the
+// camera, so the constellations drawn across them stay fixed on the sky.
+let bgStars = [];
 let cowImage;
 let view = { scale: 1, focusX: 0, focusY: 0, rotation: 0, userZoom: 1 };
 // Overview/map mode — press M to toggle. Frames the whole solar system
@@ -156,6 +162,19 @@ function setup() {
       color: starTemperatureColor(random()),
     });
   }
+  // Static background stars (parallax 0). Dimmer and smaller than the
+  // parallax field so the foreground dust reads as nearer; these host the
+  // constellations.
+  for (let i = 0; i < 160; i++) {
+    bgStars.push({
+      x: random(-tileW / 2, tileW / 2),
+      y: random(-tileH / 2, tileH / 2),
+      parallax: 0,
+      size: random(0.6, 1.8),
+      brightness: random(0.4, 0.9),
+      color: starTemperatureColor(random()),
+    });
+  }
   loadDebugFromStorage();
   buildWorld();
   resetGame();
@@ -234,11 +253,12 @@ function buildWorld() {
 
   assignPlanetNames();
 
-  // Pick the starter planet (smallest, highest gravity) and put the base on its surface.
+  // No launch pad yet -- the player picks where to build it after the first
+  // landing (see buildLaunchPad). Just remember a nice "top" angle to drop the
+  // ship in above so the opening descent starts upright.
+  base = null;
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
-  if (starter) {
-    base = new Base(starter, pickBaseAngle(starter));
-  }
+  starterSpawnAngle = starter ? pickBaseAngle(starter) : 0;
 }
 let minimapBuffer = null;
 
@@ -441,7 +461,14 @@ function draw() {
     planet.draw();
   }
 
+  // Foreground vegetation on nearby vegetated worlds (drawn over terrain,
+  // under the pad/ship/cows).
+  drawSurfaceTrees();
+
   if (base) base.draw();
+
+  // Soft contact shadow the ship casts onto the ground beneath it.
+  drawLanderShadow();
 
   drawBurnParticles();
   drawSplashParticles();
@@ -528,11 +555,11 @@ function resetGame() {
   // finding the launch pad — takes a short hop to reach (the nav arrow points
   // the way), without being a marathon traverse.
   padFound = false;
+  // A fresh run has no pad; the player builds one after touching down.
+  base = null;
   let starter = planets.find((p) => !p.isSun && p.landscape && p.landscape.some((pt) => pt.landable));
   if (starter) {
-    let offsetDeg = base ? degrees(2500 / starter.baseRadius) : 0;
-    let spawnAngle = base ? base.surfaceAngle + offsetDeg : 0;
-    lander.spawnAbovePlanet(starter, spawnAngle);
+    lander.spawnAbovePlanet(starter, starterSpawnAngle);
     starter.discovered = true;
   }
   gameState = GAME_STATES.WAITING;
@@ -586,6 +613,22 @@ function liftOff() {
   lander.landingPlanet = null;
   lander.landingOffset = null;
   gameState = GAME_STATES.PLAYING;
+}
+
+// Build the launch pad wherever the ship is currently sitting. Valid once per
+// run, while landed and before a pad exists. The pad becomes home base from
+// here on (delivery point + workshop) and doubles as the fuel depot, so it
+// tops off the tank on construction.
+function buildLaunchPad() {
+  if (base || !lander || gameState !== GAME_STATES.LANDED) return;
+  let planet = lander.landingPlanet || lander.nearestPlanet;
+  if (!planet) return;
+  let angle = atan2(lander.pos.y - planet.center.y, lander.pos.x - planet.center.x);
+  if (angle < 0) angle += 360;
+  base = new Base(planet, angle);
+  padFound = true;
+  lander.fuel = lander.maxFuel;
+  showEvent("Launch pad constructed! This is now home base.");
 }
 
 function tryDeliver() {
@@ -781,6 +824,7 @@ function updateWorld(timeScale = 1) {
   if (DEBUG.fluidBurn) {
     updateBurnFluid(getBurnState());
   }
+  updateThrusterWaterSpray(timeScale);
   updateWaterInteraction(timeScale);
   updateSplashParticles(timeScale);
   updateDiscoveries();
@@ -950,6 +994,45 @@ function updateWaterInteraction(timeScale = 1) {
     spawnCrashEffect(lander.pos.x, lander.pos.y, lander.vel.x, lander.vel.y, lander.rotation, lander.scale);
     lander.crash();
     gameState = GAME_STATES.CRASHED;
+  }
+}
+
+// Engine exhaust hitting the sea: while the ship thrusts low over water, fan a
+// continuous sheet of spray up off the surface foot under the nozzle. Reuses the
+// splash particle system so the droplets arc back down under the planet's
+// gravity. Independent of the GPU plume so it works with the particle flame too.
+function updateThrusterWaterSpray(timeScale = 1) {
+  if (!lander || !lander.active) return;
+  if (gameState !== GAME_STATES.PLAYING) return;
+  if (lander.thrusting <= 0 || lander.fuel <= 0) return;
+  let ground = getPlumeGround();
+  if (!ground || !ground.onWater) return;
+  // Only once the blast is close enough to disturb the surface.
+  let reach = 140;
+  if (ground.dist > reach) return;
+  let planet = lander.nearestPlanet;
+  if (!planet) return;
+
+  // Stronger, denser spray the closer and harder the engine pushes.
+  let prox = constrain(1 - ground.dist / reach, 0, 1);
+  let intensity = lander.thrusting * prox;
+  let count = floor(intensity * 6 * timeScale);
+  let nx = ground.nx, ny = ground.ny;   // radial (outward) over the flat sea
+  let tx = -ny, ty = nx;                 // tangent along the surface
+  for (let i = 0; i < count; i++) {
+    let nFactor = random(0.6, 1.3);
+    let tFactor = random(-1.2, 1.2);     // wide fan as the exhaust splays sideways
+    let spd = random(2, 6) * (0.6 + intensity);
+    splashParticles.push({
+      x: ground.px + tx * random(-12, 12),
+      y: ground.py + ty * random(-12, 12),
+      vx: (nx * nFactor + tx * tFactor) * spd,
+      vy: (ny * nFactor + ty * tFactor) * spd,
+      planet: planet,
+      life: random(0.5, 1.0),
+      size: random(2, 5),
+      bubble: false
+    });
   }
 }
 
@@ -1696,6 +1779,19 @@ function getPlumeGround() {
   let nm = sqrt(nx * nx + ny * ny) || 1;
   nx /= nm; ny /= nm;
 
+  // If the spot under the nozzle is flooded, the exhaust hits the water surface
+  // rather than the seabed: raise the collision foot to sea level and flatten
+  // the normal to radial (a calm sea has no slope). `onWater` lets the caller
+  // kick up spray instead of dust.
+  let onWater = false;
+  let seaR = planet.seaLevel > 0 ? planet.baseRadius + planet.seaLevel : 0;
+  if (seaR > surfR && dist > seaR) {
+    surfR = seaR;
+    onWater = true;
+    nx = dx / dist;
+    ny = dy / dist;
+  }
+
   return {
     nozzle,
     angleDeg: lander.rotation,
@@ -1703,6 +1799,7 @@ function getPlumeGround() {
     py: planet.center.y + (dy / dist) * surfR,
     nx, ny,                                      // local terrain normal
     dist: dist - surfR,                          // nozzle altitude above surface
+    onWater,
   };
 }
 
@@ -1731,6 +1828,211 @@ function getBurnState() {
     scale: lander.scale,
     center: lander.pos,
   };
+}
+
+function normalizeAngle(angle) {
+  return ((angle % 360) + 360) % 360;
+}
+
+function angleDelta(a, b) {
+  return ((a - b + 540) % 360) - 180;
+}
+
+// Continuous view angle around a planet. Parallax layers use this instead of
+// the wrapped 0..360 angle so they drift smoothly across the seam.
+function getPlanetViewAngle(planet) {
+  if (!planet || !lander) return 0;
+  let dx = lander.pos.x - planet.center.x;
+  let dy = lander.pos.y - planet.center.y;
+  if (dx === 0 && dy === 0) return planet._parallaxViewAngle || 0;
+  let angle = normalizeAngle(atan2(dy, dx));
+  if (planet._parallaxViewAngle === undefined) {
+    planet._parallaxViewAngle = angle;
+  } else {
+    planet._parallaxViewAngle += angleDelta(angle, planet._parallaxViewAngle);
+  }
+  return planet._parallaxViewAngle;
+}
+
+// Soft elliptical contact shadow on the surface directly under the ship. It
+// sits slightly "below" the terrain contact in local screen-down space so the
+// ship reads more like a 2D sprite hovering over a flat layer.
+function drawLanderShadow() {
+  if (!lander || lander.crashed) return;
+  let { planet } = getClosestPlanetInfo();
+  if (!planet || planet.isSun) return;
+  let dx = lander.pos.x - planet.center.x;
+  let dy = lander.pos.y - planet.center.y;
+  let dist = sqrt(dx * dx + dy * dy);
+  if (dist < 1) return;
+  let angle = atan2(dy, dx);
+  if (angle < 0) angle += 360;
+  let surfR = getSurfaceRadius(planet, angle);
+  let altitude = dist - surfR;
+  const MAX_ALT = 520;
+  if (altitude < -30 || altitude > MAX_ALT) return;
+  let nx = dx / dist, ny = dy / dist;
+  let fx = planet.center.x + nx * surfR;
+  let fy = planet.center.y + ny * surfR;
+  // f: 1 on the deck -> 0 at MAX_ALT. Low = darker + tighter.
+  let f = constrain(1 - altitude / MAX_ALT, 0, 1);
+  f = pow(f, 0.75);
+  let w = lander.radius * 2.8 * (1.05 + (1 - f) * 1.9);
+  let h = w * 0.16;
+  let drop = 10 + (1 - f) * 22;
+  push();
+  translate(fx, fy);
+  rotate(angle + 90);   // flatten the ellipse onto the surface tangent
+  noStroke();
+  fill(0, 0, 0, 55 * f);
+  ellipse(0, drop + 2, w * 1.2, h * 1.25);
+  fill(0, 0, 0, 95 * f);
+  ellipse(0, drop, w, h);
+  pop();
+}
+
+// Lazily scatter trees across a vegetated world's land vertices. Cached on
+// the planet so the layout is stable between frames. Deterministic per vertex
+// index (no global random state touched) and skips anything below the
+// waterline so trees never grow out of the sea.
+function ensureTrees(planet) {
+  if (planet._trees) return planet._trees;
+  let trees = [];
+  if (planet.seaLevel > 0 && planet.landscape) {
+    let seaR = planet.baseRadius + planet.seaLevel;
+    for (let i = 0; i < planet.landscape.length - 1; i++) {
+      let p = planet.landscape[i];
+      if (p.r <= seaR + 30) continue;                  // land only
+      let hsh = Math.sin(i * 12.9898) * 43758.5453;
+      hsh = hsh - Math.floor(hsh);                     // 0..1 hash
+      if (hsh > 0.35) continue;                        // ~1/3 of land gets a tree
+      let layer = hsh / 0.35;
+      let seed = Math.sin(i * 78.233) * 43758.5453;
+      seed = seed - Math.floor(seed);
+      trees.push({
+        angle: p.angle,
+        r: p.r,
+        size: 12 + layer * 30,
+        kind: floor(seed * 3),
+        depth: 0.07 + layer * 0.26,
+        seed,
+        phase: seed * 360,
+        lean: seed * 2 - 1,
+      });
+    }
+  }
+  planet._trees = trees;
+  return trees;
+}
+
+function drawSwayingTreeSprite(t, drawAngle, alpha) {
+  let size = t.size;
+  let wind = sin(frameCount * (1.15 + t.depth * 1.4) + t.phase) * (2.0 + t.depth * 7.0);
+  let lean = t.lean * size * 0.09;
+  let topX = lean + wind * 0.38;
+  let trunkTop = -size * 0.78;
+
+  // Tapered trunk. The base stays planted while the crown bends with wind.
+  noStroke();
+  fill(62, 45, 32, alpha);
+  beginShape();
+  vertex(-size * 0.12, 4);
+  bezierVertex(-size * 0.08, -size * 0.25, topX - size * 0.07, trunkTop * 0.75, topX - size * 0.05, trunkTop);
+  vertex(topX + size * 0.06, trunkTop);
+  bezierVertex(topX + size * 0.02, trunkTop * 0.7, size * 0.11, -size * 0.2, size * 0.13, 4);
+  endShape(CLOSE);
+
+  fill(95, 68, 42, alpha * 0.55);
+  beginShape();
+  vertex(-size * 0.03, 2);
+  bezierVertex(size * 0.01, -size * 0.22, topX + size * 0.015, trunkTop * 0.7, topX + size * 0.025, trunkTop);
+  vertex(topX + size * 0.055, trunkTop);
+  bezierVertex(topX + size * 0.02, trunkTop * 0.65, size * 0.09, -size * 0.18, size * 0.09, 2);
+  endShape(CLOSE);
+
+  stroke(48, 36, 27, alpha * 0.65);
+  strokeWeight(max(1, size * 0.025));
+  line(topX - size * 0.01, -size * 0.45, topX - size * (0.22 + t.seed * 0.08) + wind * 0.18, -size * 0.66);
+  line(topX + size * 0.015, -size * 0.53, topX + size * (0.2 + t.seed * 0.1) + wind * 0.24, -size * 0.76);
+  noStroke();
+
+  if (t.kind === 0) {
+    // Conifer: stacked boughs, wider and darker near the bottom.
+    for (let i = 0; i < 4; i++) {
+      let f = i / 3;
+      let cy = -size * (0.58 + f * 0.24);
+      let w = size * (0.85 - f * 0.18);
+      let h = size * (0.34 - f * 0.04);
+      let sx = topX + wind * (0.2 + f * 0.18);
+      fill(28 + f * 16, 92 + f * 22, 50 + f * 8, alpha);
+      triangle(sx - w * 0.5, cy + h * 0.28, sx + w * 0.5, cy + h * 0.28, sx + wind * 0.18, cy - h * 0.72);
+    }
+    fill(85, 150, 74, alpha * 0.55);
+    triangle(topX - size * 0.28, -size * 0.82, topX + size * 0.18, -size * 0.84, topX + wind * 0.2, -size * 1.14);
+    return;
+  }
+
+  if (t.kind === 1) {
+    // Broadleaf: overlapping blobs make a single swaying crown.
+    let crownY = -size * 0.88;
+    let crownX = topX + wind * 0.42;
+    fill(31, 99, 50, alpha);
+    ellipse(crownX - size * 0.23, crownY + size * 0.03, size * 0.58, size * 0.48);
+    ellipse(crownX + size * 0.22, crownY + size * 0.02, size * 0.56, size * 0.46);
+    fill(44, 126, 61, alpha);
+    ellipse(crownX, crownY - size * 0.12, size * 0.72, size * 0.58);
+    fill(72, 148, 72, alpha * 0.65);
+    ellipse(crownX - size * 0.12, crownY - size * 0.22, size * 0.34, size * 0.24);
+    return;
+  }
+
+  // Wind-bent tuft tree: taller silhouette with a comma-shaped canopy.
+  let crownX = topX + wind * 0.55;
+  let crownY = -size * 0.95;
+  fill(35, 106, 55, alpha);
+  ellipse(crownX, crownY, size * 0.52, size * 0.82);
+  ellipse(crownX + size * 0.22 + wind * 0.08, crownY + size * 0.04, size * 0.42, size * 0.62);
+  fill(61, 138, 70, alpha * 0.72);
+  ellipse(crownX + size * 0.05, crownY - size * 0.2, size * 0.34, size * 0.42);
+}
+
+// Foreground trees on the nearest vegetated world. Only renders when the ship
+// is near the surface, and only the arc around the ship, so it stays cheap.
+function drawSurfaceTrees() {
+  if (!lander) return;
+  let { planet, surfaceDistance } = getClosestPlanetInfo();
+  if (!planet || planet.isSun || planet.seaLevel <= 0) return;
+  if (surfaceDistance > 2000) return;
+  let trees = ensureTrees(planet);
+  if (!trees.length) return;
+  let shipAngle = getPlanetViewAngle(planet);
+  let visible = [];
+  for (let t of trees) {
+    // Foreground layers lead the camera slightly, so nearby trunks slide over
+    // the surface faster than the terrain beneath them.
+    let drawAngle = t.angle - shipAngle * t.depth;
+    let da = abs(angleDelta(drawAngle, shipAngle));
+    if (da > 46) continue;                             // local arc around the ship
+    visible.push({ tree: t, drawAngle });
+  }
+  visible.sort((a, b) => a.tree.depth - b.tree.depth);
+
+  for (let item of visible) {
+    let t = item.tree;
+    let drawAngle = normalizeAngle(item.drawAngle);
+    let surfaceR = getSurfaceRadius(planet, drawAngle);
+    let r = surfaceR - 46 + t.depth * 8;
+    let x = planet.center.x + r * cos(drawAngle);
+    let y = planet.center.y + r * sin(drawAngle);
+    let s = 1.05 + t.depth * 2.7;
+    let alpha = constrain(155 + t.depth * 360, 0, 255);
+    push();
+    translate(x, y);
+    rotate(drawAngle + 90);                            // local -y points skyward
+    scale(s);
+    drawSwayingTreeSprite(t, drawAngle, alpha);
+    pop();
+  }
 }
 
 function getSurfaceDistance(position, planet) {
@@ -1818,8 +2120,8 @@ function pickConstellation(positions) {
   const EXTRA_EDGES = 2;       // triangle-forming edges added after MST
 
   let candidates = [];
-  for (let i = 0; i < stars.length; i++) {
-    if (stars[i].parallax <= MAX_PARALLAX) candidates.push(i);
+  for (let i = 0; i < bgStars.length; i++) {
+    if (bgStars[i].parallax <= MAX_PARALLAX) candidates.push(i);
   }
   if (candidates.length < MIN_NODES) return null;
 
@@ -1920,25 +2222,27 @@ function drawStarField() {
   let cy = view.focusY;
 
   push();
-  // Stars rotate with the world view so the gravity-driven camera roll feels consistent.
+  // Stars rotate with the world view so the gravity-driven camera roll feels
+  // consistent.
   translate(width / 2, height / 2);
   rotate(view.rotation);
 
-  // Resolve each star's screen position once so the constellation pass can reuse it.
-  let positions = new Array(stars.length);
-  for (let i = 0; i < stars.length; i++) {
-    let s = stars[i];
-    let px = s.x - cx * s.parallax;
-    let py = s.y - cy * s.parallax;
-    let sx = ((px + tileW / 2) % tileW + tileW) % tileW - tileW / 2;
-    let sy = ((py + tileH / 2) % tileH + tileH) % tileH - tileH / 2;
-    positions[i] = { x: sx, y: sy };
+  // --- Background layer: static (parallax-0) stars that host the constellations.
+  // They don't translate with the camera, so the figures stay fixed on the
+  // celestial sphere and only swing with the camera roll. ---
+  let bgPos = new Array(bgStars.length);
+  for (let i = 0; i < bgStars.length; i++) {
+    let s = bgStars[i];
+    let sx = ((s.x + tileW / 2) % tileW + tileW) % tileW - tileW / 2;
+    let sy = ((s.y + tileH / 2) % tileH + tileH) % tileH - tileH / 2;
+    bgPos[i] = { x: sx, y: sy };
   }
 
-  // Advance the active constellation and pick a fresh one when it expires.
+  // Advance the active constellation and pick a fresh one (from bgStars) when it
+  // expires.
   constellation.age++;
   if (constellation.age >= constellation.lifespan) {
-    let picked = pickConstellation(positions);
+    let picked = pickConstellation(bgPos);
     constellation = {
       nodes: picked ? picked.nodes : [],
       edges: picked ? picked.edges : [],
@@ -1947,43 +2251,59 @@ function drawStarField() {
     };
   }
 
-  // Sine envelope: 0 → 1 (mid-life) → 0. Drives line alpha + per-star shine
-  // so the figure pulses as a unit.
+  // Sine envelope: 0 -> 1 (mid-life) -> 0. Drives line alpha + per-star shine so
+  // the figure pulses as a unit.
   let envelope = max(0, sin((constellation.age / constellation.lifespan) * 180));
   let highlighted = new Set(constellation.nodes);
 
-  // Render every star; brighten + enlarge the highlighted ones with the envelope.
-  for (let i = 0; i < stars.length; i++) {
-    let s = stars[i];
-    let p = positions[i];
+  // Render every background star; brighten + enlarge the highlighted ones.
+  for (let i = 0; i < bgStars.length; i++) {
+    let s = bgStars[i];
+    let p = bgPos[i];
     let isHi = highlighted.has(i);
     let mult = isHi ? 1 + envelope * 2.0 : 1;
-    let r = min(255, s.color[0] * s.brightness * mult);
-    let g = min(255, s.color[1] * s.brightness * mult);
-    let b = min(255, s.color[2] * s.brightness * mult);
-    stroke(r, g, b);
+    stroke(min(255, s.color[0] * s.brightness * mult),
+           min(255, s.color[1] * s.brightness * mult),
+           min(255, s.color[2] * s.brightness * mult));
     strokeWeight(s.size * (isHi ? 1 + envelope * 1.2 : 1));
     point(p.x, p.y);
   }
 
-  // Per-edge lines (not a polyline) so MST + triangle edges all render correctly.
-  // Soft wide glow underneath, crisp core on top — both modulated by the envelope.
+  // Per-edge lines (not a polyline) so MST + triangle edges all render. Soft wide
+  // glow underneath, crisp core on top — both modulated by the envelope.
   if (constellation.edges.length > 0 && envelope > 0.02) {
     stroke(180, 210, 255, envelope * 50);
     strokeWeight(4);
     for (let [a, b] of constellation.edges) {
-      let pa = positions[a], pb = positions[b];
+      let pa = bgPos[a], pb = bgPos[b];
       line(pa.x, pa.y, pb.x, pb.y);
     }
     stroke(255, 255, 255, envelope * 170);
     strokeWeight(1.2);
     for (let [a, b] of constellation.edges) {
-      let pa = positions[a], pb = positions[b];
+      let pa = bgPos[a], pb = bgPos[b];
       line(pa.x, pa.y, pb.x, pb.y);
     }
   }
+
+  // --- Foreground layer: the parallax twinkle field, drawn on top so it reads as
+  // nearer dust drifting in front of the fixed constellations. ---
+  for (let i = 0; i < stars.length; i++) {
+    let s = stars[i];
+    let px = s.x - cx * s.parallax;
+    let py = s.y - cy * s.parallax;
+    let sx = ((px + tileW / 2) % tileW + tileW) % tileW - tileW / 2;
+    let sy = ((py + tileH / 2) % tileH + tileH) % tileH - tileH / 2;
+    stroke(min(255, s.color[0] * s.brightness),
+           min(255, s.color[1] * s.brightness),
+           min(255, s.color[2] * s.brightness));
+    strokeWeight(s.size);
+    point(sx, sy);
+  }
+
   pop();
 }
+
 function checkCollisions(lander, planets) {
   if (!lander.active) {
     return false;
@@ -2236,45 +2556,103 @@ function getBeamStopPositionRadial( planet, maxBeamLength) {
 }
 
 
+// Horizontal HUD gauge: a track with a colored fill that ramps colA->colB as
+// the reading approaches danger, a centered label, and a tick marking the
+// danger threshold. `lowIsGood` flips the ramp so an emptying fuel bar reddens
+// as it drains, while a rising heat bar reddens as it climbs toward the limit.
+function drawHudGauge(x, y, w, h, frac, label, colA, colB, dangerFrac, lowIsGood) {
+  frac = constrain(frac, 0, 1);
+  let t = lowIsGood ? 1 - frac : frac;            // 0 = safe, 1 = danger
+  let critical = t >= dangerFrac;
+  let pulse = critical ? 0.6 + 0.4 * sin(frameCount * 12) : 1;
+  let r = lerp(colA[0], colB[0], t) * pulse;
+  let g = lerp(colA[1], colB[1], t) * pulse;
+  let b = lerp(colA[2], colB[2], t) * pulse;
+
+  push();
+  noStroke();
+  // Track.
+  fill(255, 255, 255, 28);
+  rect(x, y, w, h, 3);
+  // Fill.
+  fill(r, g, b);
+  rect(x, y, w * frac, h, 3);
+  // Danger tick (the explosion / empty limit for this gauge).
+  let tickX = x + w * (lowIsGood ? 1 - dangerFrac : dangerFrac);
+  stroke(255, 80, 60, 210);
+  strokeWeight(2);
+  line(tickX, y - 2, tickX, y + h + 2);
+  noStroke();
+  // Label.
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(11);
+  text(label, x + w / 2, y + h / 2 + 0.5);
+  pop();
+}
+
 function drawHUD() {
   push();
   noStroke();
-  fill(0, 0, 0, 145);
-  rect(12, 12, 390, 238);
+  fill(0, 0, 0, 160);
+  rect(12, 12, 404, 252, 8);
   pop();
 
-  fill(255);
+  push();
+  textAlign(LEFT, TOP);
   noStroke();
-  textAlign(LEFT);
-  textSize(16);
 
-  text(`Fuel: ${floor(lander.fuel)} / ${lander.maxFuel}`, 20, 30);
-  text(`Altitude: ${floor(lander.altitude)}`, 20, 50);
+  // --- Gauges: fuel and hull heat, side by side ---
+  let gaugeW = 184, gaugeH = 12;
+  let fx = 22, hx = 22 + gaugeW + 14, gy = 24;
+
+  // Fuel gauge: green when full, ambers as it drains, tick near empty.
+  let fuelFrac = lander.maxFuel > 0 ? lander.fuel / lander.maxFuel : 0;
+  drawHudGauge(fx, gy, gaugeW, gaugeH, fuelFrac,
+    `FUEL  ${floor(lander.fuel)}/${lander.maxFuel}`,
+    [80, 200, 120], [230, 150, 50], 0.25, true);
+
+  // Heat gauge: blue when cool, reddens toward the explosion limit (full bar).
+  // The danger tick sits at 70% -- past it the hull glows and the bar pulses.
+  let heatFrac = (lander.heat || 0) / (DEBUG.heatMax || 100);
+  drawHudGauge(hx, gy, gaugeW, gaugeH, heatFrac,
+    `HULL HEAT  ${floor(lander.heat || 0)}/${DEBUG.heatMax}`,
+    [90, 160, 230], [255, 60, 40], 0.7, false);
+
+  // --- Text readouts (two columns) ---
+  fill(235);
+  textSize(14);
+  let lx = 22, rx = 22 + gaugeW + 14, ty = gy + gaugeH + 16, lh = 19;
 
   // Atmospheric drag readout: density and the resulting per-frame velocity
   // bleed. The displayed number accounts for substepping (lander.update), so
-  // it never exceeds 100% even when k·ts is large.
+  // it never exceeds 100% even when the drag coefficient is large.
   let atmoDensity = 0;
   for (let p of planets) atmoDensity += p.atmosphericDensity(lander.pos.x, lander.pos.y);
   if (atmoDensity > 1) atmoDensity = 1;
   let kts = DEBUG.atmosphereDrag * atmoDensity * timeScale;
   let dragSubsteps = max(1, ceil(kts / SUBSTEP_MAX_KDT));
   let dragPerFrame = 1 - pow(max(0, 1 - kts / dragSubsteps), dragSubsteps);
-  text(
-    `Velocity: ${lander.vel.mag().toFixed(2)}  Atmo: ${(atmoDensity * 100).toFixed(0)}%  Drag: ${(dragPerFrame * 100).toFixed(1)}%/f`,
-    20,
-    70
-  );
 
-  text(`Cargo: ${cargo} / ${lander.maxCargo}`, 20, 90);
-  text(`Delivered: ${delivered} / ${DELIVERY_GOAL}`, 20, 110);
-  text(`Research: ${research}`, 20, 130);
-  text(`Score: ${score}`, 20, 150);
+  text(`Altitude  ${floor(lander.altitude)}`, lx, ty);
+  text(`Velocity  ${lander.vel.mag().toFixed(2)}`, rx, ty);
+  text(`Atmosphere  ${(atmoDensity * 100).toFixed(0)}%`, lx, ty + lh);
+  text(`Drag  ${(dragPerFrame * 100).toFixed(1)}%/f`, rx, ty + lh);
+  text(`Cargo  ${cargo}/${lander.maxCargo}`, lx, ty + lh * 2);
+  text(`Delivered  ${delivered}/${DELIVERY_GOAL}`, rx, ty + lh * 2);
+  text(`Research  ${research}`, lx, ty + lh * 3);
+  text(`Score  ${score}`, rx, ty + lh * 3);
+  pop();
+
   drawMissionReadout();
 
-  // Add time scale display
-  textAlign(RIGHT);
-  text(`Time Scale: ${timeScale.toFixed(1)}x`, width - 230, 45);
+  // Time scale (top-right corner).
+  push();
+  fill(235);
+  textAlign(RIGHT, TOP);
+  textSize(14);
+  text(`Time ${timeScale.toFixed(1)}x`, width - 230, 36);
+  pop();
 
   if (lander && lander.active) {
     drawNavTargetIndicator(getNavTarget());
@@ -2312,7 +2690,7 @@ function drawMissionReadout() {
   let specimensRemaining = cows.filter((cow) => cow.state !== "stowed").length;
   let objective;
   if (!padFound) {
-    objective = "Descend and land at the launch pad";
+    objective = "Descend, land anywhere safe, then press B to build your launch pad";
   } else if (cargo > 0) {
     objective = "Land at base to deliver cargo";
   } else {
@@ -2329,7 +2707,7 @@ function drawMissionReadout() {
     text(`Nearest: ${bodyName} (${floor(nearest.distance)}m)`, 20, 200);
   }
   text(`Specimens remaining: ${specimensRemaining}`, 20, 220);
-  text("Controls: A/D rotate  |  W thrust  |  Click zap  |  Space beam", 20, 240);
+  text("Controls: A/D rotate  |  W thrust  |  C chute  |  Click zap  |  Space beam", 20, 240);
 }
 
 function getNearestPlanetInfo() {
@@ -2469,7 +2847,9 @@ function drawGameStateMessages() {
       text("CLICK OR PRESS ANY KEY TO START", width / 2, height / 2);
       break;
     case GAME_STATES.LANDED:
-      if (base && base.inRange(lander.pos)) {
+      if (!base) {
+        text("LANDED\nPRESS B TO BUILD YOUR LAUNCH PAD HERE\nOR ANY OTHER KEY TO LIFT OFF", width / 2, height / 2 - 30);
+      } else if (base.inRange(lander.pos)) {
         text("AT BASE - FULL TANK\nCLICK UPGRADES OR PRESS ANY KEY TO LIFT OFF", width / 2, height / 2 - 30);
       } else {
         text("LANDED - PRESS ANY KEY TO LIFT OFF", width / 2, height / 2);
@@ -2506,10 +2886,26 @@ function keyPressed() {
     return;
   }
   if (gameState === GAME_STATES.LANDED) {
+    // No pad yet -> B builds one here; any other key lifts off without building.
+    if (!base && (key === "b" || key === "B")) {
+      buildLaunchPad();
+      return;
+    }
     liftOff();
     return;
   }
   // Movement / beam are polled via keyIsDown in pollInput().
+  if (key === "c" || key === "C") {
+    if (lander && lander.active) {
+      if (!lander.parachute && lander.sampleAtmosphereAt(lander.pos).density > 0.02) {
+        lander.parachute = true;
+        showEvent("Parachute deployed");
+      } else if (lander.parachute) {
+        lander.parachute = false;
+        showEvent("Parachute cut");
+      }
+    }
+  }
   if (key === "t" || key === "T") {
     setDebugValue("showTrajectory", !DEBUG.showTrajectory);
   }

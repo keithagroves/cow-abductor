@@ -4,12 +4,13 @@
 
 - Show heat level in the dash view and the limit where the ship will explode.
 
-
-- update the dash metrics in a better hud view.
-
-- use a shader to draw the ship.
+- update the dash metrics in a better view.
 
 - thrusters dont interact with water
+
+- add shadows on the ground?
+
+- add parallax background hills and foreground paralax trees. Not sure how this is going to work on the planet. maybe the background hills rotate as you move or something?
 
 NICE TO HAVES:
 - Maybe deploy a parachute on entry? Could be a good tool for landing on planets.

@@ -52,11 +52,26 @@ class Planet {
     // Clouds are now drawn by the shader pass in clouds.js (a continuous
     // FBM density field rather than discrete ellipses), so no per-planet
     // cloud state is needed here.
-    // Background ridge silhouette — a second landscape with a different noise
-    // seed and slightly larger amplitude. Rendered before the main terrain in
-    // an atmospheric-haze color so its peaks read as distant mountains behind
-    // the foreground silhouette (Hollow-Knight-style depth on the ground).
-    this.backgroundRidge = this.hasAtmosphere() ? this.generateBackgroundRidge() : [];
+    // Background ridge silhouettes. They render behind the main terrain and
+    // follow most of the player's surface angle, so they visibly slide with the
+    // camera while still lagging the foreground enough to read as depth.
+    this.backgroundRidges = this.hasAtmosphere() ? [
+      {
+        points: this.generateBackgroundRidge(0.5, 0.035, 900),
+        follow: 0.68,
+        lift: this.noiseIntensity * 0.13,
+        alpha: 125,
+        skyMix: 0.76,
+      },
+      {
+        points: this.generateBackgroundRidge(0.82, 0.055, 500),
+        follow: 0.84,
+        lift: this.noiseIntensity * 0.07,
+        alpha: 205,
+        skyMix: 0.55,
+      },
+    ] : [];
+    this.backgroundRidge = this.backgroundRidges.length > 0 ? this.backgroundRidges[1].points : [];
   }
 
   // Set the planet's density and recompute the GM term (`this.gravity`) used by
@@ -70,23 +85,23 @@ class Planet {
     this.gravity = density * (this.baseRadius * this.baseRadius * this.baseRadius) / GRAVITY_REFERENCE_RADIUS;
   }
 
-  generateBackgroundRidge() {
+  generateBackgroundRidge(amplitudeScale = 0.9, noiseStep = 0.06, seedBias = 500) {
     // 3× the main terrain's resolution — bg ridge ends up with finer detail
     // along the silhouette without affecting collision/landing (which still
     // uses this.landscape).
     let pointCount = this.numPoints * 3;
     let angleStep = 360 / pointCount;
     // Independent seed so this ridge's peaks don't align with main terrain's.
-    let noiseOffset = random(1000) + 500;
+    let noiseOffset = random(1000) + seedBias;
     let points = [];
     // Amplitude smaller than the main terrain so the ridge mostly sits
     // below the foreground silhouette and only an occasional peak pokes
     // above as a distant "horizon" mountain.
-    let amplitude = this.noiseIntensity * 0.9;
+    let amplitude = this.noiseIntensity * amplitudeScale;
     for (let i = 0; i < pointCount; i++) {
       let angle = i * angleStep;
       let r = this.baseRadius + noise(noiseOffset) * amplitude;
-      noiseOffset += 0.06; // broader features than main terrain (which steps 0.1)
+      noiseOffset += noiseStep; // broader features than main terrain (which steps 0.1)
       points.push({ angle, r, x: 0, y: 0 });
     }
     points.push({ ...points[0] });
@@ -284,10 +299,12 @@ class Planet {
       point.x = this.center.x + r * cos(angle);
       point.y = this.center.y + r * sin(angle);
     }
-    if (this.backgroundRidge) {
-      for (let point of this.backgroundRidge) {
-        point.x = this.center.x + point.r * cos(point.angle);
-        point.y = this.center.y + point.r * sin(point.angle);
+    if (this.backgroundRidges) {
+      for (let layer of this.backgroundRidges) {
+        for (let point of layer.points) {
+          point.x = this.center.x + point.r * cos(point.angle);
+          point.y = this.center.y + point.r * sin(point.angle);
+        }
       }
     }
   }
@@ -553,29 +570,35 @@ class Planet {
       ctx.fill();
     }
 
-// Background ridge — distant-mountain silhouette painted in atmospheric
-    // haze, drawn before the main terrain so its peaks read as horizon hills
-    // behind the foreground. Only the parts that stick above the foreground
-    // outline are visible; the rest gets covered when we draw the main body.
-    // Gated by hasAtmosphere() at render time so airless bodies (moon) don't
-    // pick up the haze even though the ridge was generated in the constructor.
-    if (this.hasAtmosphere() && this.backgroundRidge && this.backgroundRidge.length > 0) {
-      push();
-      noStroke();
-      // Blend the planet's own fill with the atmosphere's sky color and
-      // darken slightly so distance reads.
+    // Background ridges -- distant mountain silhouettes painted in atmospheric
+    // haze. Each layer follows most of the lander's surface angle; in screen
+    // space that makes the hills move with the player, but slower than nearby
+    // terrain.
+    if (this.hasAtmosphere() && this.backgroundRidges && this.backgroundRidges.length > 0) {
+      let viewAngle = (typeof getPlanetViewAngle === "function") ? getPlanetViewAngle(this) : 0;
       let baseR = red(this.fillColor);
       let baseG = green(this.fillColor);
       let baseB = blue(this.fillColor);
-      let bgR = baseR * 0.45 + 90 * 0.55;
-      let bgG = baseG * 0.45 + 130 * 0.55;
-      let bgB = baseB * 0.45 + 180 * 0.55;
-      fill(bgR, bgG, bgB, 220);
-      beginShape();
-      for (let p of this.backgroundRidge) {
-        vertex(p.x, p.y);
+      push();
+      noStroke();
+      for (let layer of this.backgroundRidges) {
+        let mix = layer.skyMix;
+        let bgR = baseR * (1 - mix) + 90 * mix;
+        let bgG = baseG * (1 - mix) + 130 * mix;
+        let bgB = baseB * (1 - mix) + 180 * mix;
+        fill(bgR, bgG, bgB, layer.alpha);
+        beginShape();
+        let shift = viewAngle * layer.follow;
+        for (let p of layer.points) {
+          let a = p.angle + shift;
+          let r = p.r + layer.lift;
+          vertex(
+            this.center.x + r * cos(a),
+            this.center.y + r * sin(a)
+          );
+        }
+        endShape(CLOSE);
       }
-      endShape(CLOSE);
       pop();
     }
 
