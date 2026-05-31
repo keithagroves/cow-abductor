@@ -27,7 +27,7 @@ const DEBUG = {
   heatMax: 100,           // hull explodes when heat reaches this value
   fluidPlume: true,       // experimental GPU stable-fluids exhaust plume (off = particle flame)
   fluidPlumeScale: 220,   // world-space size of the fluid plume quad
-  fluidBurn: false,       // experimental GPU stable-fluids re-entry burn wake (additive to particles)
+  fluidBurn: true,        // experimental GPU stable-fluids re-entry burn wake (additive to particles)
   fluidBurnScale: 160,    // world-space size of the fluid burn quad
   shaderShip: true,       // experimental shader-rendered alien hull (off = vector hull)
   shown: false
@@ -36,7 +36,7 @@ const DEBUG = {
 const DEBUG_DEFAULTS = Object.freeze({ ...DEBUG });
 const DEBUG_STORAGE_KEY = "cow-abductor:debug";
 // Bump when default values shift in a way that should reset old saves.
-const DEBUG_VERSION = 19;
+const DEBUG_VERSION = 20;
 
 function loadDebugFromStorage() {
   try {
